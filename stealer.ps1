@@ -77,4 +77,3 @@ Remove-Item hbd.zip,HBD -Recurse -Force -EA 0
 
 # Notification fin
 irm $wh -Method Post -Body (@{content="🧹 Cleanup complete. Script finished."}|ConvertTo-Json) -ContentType "application/json" -ErrorAction SilentlyContinue
-

